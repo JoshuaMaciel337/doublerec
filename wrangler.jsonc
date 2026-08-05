@@ -12,6 +12,12 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  // valores públicos (publishable key), seguros para ficar no repositório —
+  // ver lib/supabase/config.ts para o mesmo fallback usado no código
+  "vars": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://fzqzpqpglexxuvldnkwq.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ze81G5jk6Y6yBc6-1t5plA_1VdllZ_E"
+  },
   "services": [
     {
       "binding": "WORKER_SELF_REFERENCE",
