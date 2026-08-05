@@ -5,7 +5,7 @@ import {
   FacingMode,
   Fps,
   Resolution,
-  RESOLUTIONS,
+  portraitCapture,
   TrackFeatures,
   getTrackFeatures,
 } from "./capabilities";
@@ -47,10 +47,11 @@ export function useCameraStream(options: CameraStreamOptions) {
       streamRef.current = null;
       setStream(null);
 
-      const res = RESOLUTIONS[resolution];
+      const portrait = portraitCapture(resolution);
       const video: MediaTrackConstraints = {
-        width: { ideal: res.width },
-        height: { ideal: res.height },
+        width: { ideal: portrait.width },
+        height: { ideal: portrait.height },
+        aspectRatio: { ideal: portrait.width / portrait.height },
         frameRate: { ideal: fps },
       };
       if (videoDeviceId) video.deviceId = { exact: videoDeviceId };
