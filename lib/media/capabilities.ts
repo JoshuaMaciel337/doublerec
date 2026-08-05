@@ -9,6 +9,12 @@ export const RESOLUTIONS: Record<Resolution, { width: number; height: number }> 
   "1080p": { width: 1920, height: 1080 },
 };
 
+/** Resolução portrait pedida à câmera (9:16 primário) */
+export function portraitCapture(resolution: Resolution) {
+  const res = RESOLUTIONS[resolution];
+  return { width: res.height, height: res.width };
+}
+
 export const VIDEO_BITRATES: Record<Resolution, number> = {
   "720p": 5_000_000,
   "1080p": 8_000_000,
