@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "main": ".open-next/worker.js",
-  "name": "doublerec-studio",
+  "name": "doublerec",
   "compatibility_date": "2024-09-23",
   "compatibility_flags": [
     // habilita as APIs Node.js usadas pelo @supabase/ssr no servidor
@@ -15,7 +15,7 @@
   "services": [
     {
       "binding": "WORKER_SELF_REFERENCE",
-      "service": "doublerec-studio"
+      "service": "doublerec"
     }
   ]
 }
