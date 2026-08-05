@@ -81,9 +81,9 @@ export default function StudioPage() {
   const [torchOn, setTorchOn] = useState(false);
   const [minutesLeft, setMinutesLeft] = useState<number | null>(null);
 
-  // crop 9:16: estado para o overlay + ref lida pelo renderizador a cada frame
-  const [cropX, setCropX] = useState(0.5);
-  const cropXRef = useRef(0.5);
+  // posição da faixa 16:9 derivada dentro do frame 9:16 primário
+  const [cropY, setCropY] = useState(0.5);
+  const cropYRef = useRef(0.5);
 
   const canvasHRef = useRef<HTMLCanvasElement | null>(null);
   const canvasVRef = useRef<HTMLCanvasElement | null>(null);
@@ -96,8 +96,8 @@ export default function StudioPage() {
   const recording = recorder.state === "recording";
 
   const handleCropChange = useCallback((value: number) => {
-    cropXRef.current = value;
-    setCropX(value);
+    cropYRef.current = value;
+    setCropY(value);
   }, []);
 
   // zoom e flash voltam ao padrão quando o stream muda
@@ -222,7 +222,7 @@ export default function StudioPage() {
       <DualCanvasRenderer
         stream={stream}
         resolution={resolution}
-        cropXRef={cropXRef}
+        cropYRef={cropYRef}
         canvasHRef={canvasHRef}
         canvasVRef={canvasVRef}
       />
@@ -367,7 +367,9 @@ export default function StudioPage() {
                 aspect="vertical"
                 grid={grid}
                 className="h-full"
-              />
+              >
+                <CropOverlay cropY={cropY} onChange={handleCropChange} />
+              </CameraPreview>
             </div>
             <div
               className={`flex w-full items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
@@ -379,9 +381,7 @@ export default function StudioPage() {
                 aspect="horizontal"
                 grid={grid}
                 className="w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
-              >
-                <CropOverlay cropX={cropX} onChange={handleCropChange} />
-              </CameraPreview>
+              />
             </div>
           </>
         )}
@@ -450,12 +450,14 @@ export default function StudioPage() {
             <h2 className="mb-2 text-base font-semibold">DoubleRec Studio</h2>
             <p className="mb-3 text-sm leading-relaxed text-zinc-300">
               Grave uma vez. Publique em qualquer lugar. Uma única gravação
-              gera dois vídeos simultâneos: horizontal 16:9 (YouTube) e
-              vertical 9:16 (Reels, TikTok, Shorts).
+              gera dois vídeos simultâneos: vertical 9:16 (Reels, TikTok,
+              Shorts) e horizontal 16:9 derivado (YouTube).
             </p>
             <p className="mb-4 text-xs leading-relaxed text-zinc-500">
-              Arraste a janela 9:16 sobre o preview horizontal para escolher o
-              enquadramento vertical. Todo o processamento acontece no seu
+              Arraste a faixa 16:9 no preview vertical para escolher o
+              enquadramento do vídeo horizontal derivado. O vertical 9:16 usa
+              o enquadramento completo da câmera. Todo o processamento
+              acontece no seu
               navegador — nada é enviado para servidores.
             </p>
             <button
