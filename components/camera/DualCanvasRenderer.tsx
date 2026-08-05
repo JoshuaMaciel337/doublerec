@@ -6,8 +6,8 @@ import { RESOLUTIONS, Resolution } from "@/lib/media/capabilities";
 interface DualCanvasRendererProps {
   stream: MediaStream | null;
   resolution: Resolution;
-  /** posição normalizada (0..1) da janela 9:16 dentro do frame 16:9, lida a cada frame */
-  cropXRef: RefObject<number>;
+  /** posição normalizada (0..1) da faixa 16:9 derivada dentro do frame 9:16 */
+  cropYRef: RefObject<number>;
   canvasHRef: RefObject<HTMLCanvasElement | null>;
   canvasVRef: RefObject<HTMLCanvasElement | null>;
 }
@@ -17,13 +17,13 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 };
 
 /**
- * Coração do pipeline: um único <video> oculto alimenta dois canvases —
- * um com crop 16:9 (cover) e outro com a janela 9:16 posicionável.
+ * Pipeline vertical-first: 9:16 é o crop primário (cover) e 16:9 é derivado
+ * recortando uma faixa horizontal de dentro da mesma região vertical.
  */
 export default function DualCanvasRenderer({
   stream,
   resolution,
-  cropXRef,
+  cropYRef,
   canvasHRef,
   canvasVRef,
 }: DualCanvasRendererProps) {
@@ -77,22 +77,25 @@ export default function DualCanvasRenderer({
       const sw = video.videoWidth;
       const sh = video.videoHeight;
       if (sw > 0 && sh > 0) {
-        // região 16:9 "cover" do frame de origem (fonte pode não ser 16:9)
-        let hw = sw;
-        let hh = (sw * 9) / 16;
-        if (hh > sh) {
-          hh = sh;
-          hw = (sh * 16) / 9;
+        // 9:16 cover — gravação primária
+        let vw = sw;
+        let vh = (sw * 16) / 9;
+        if (vh > sh) {
+          vh = sh;
+          vw = (sh * 9) / 16;
         }
-        const hx = (sw - hw) / 2;
-        const hy = (sh - hh) / 2;
-        ctxH.drawImage(video, hx, hy, hw, hh, 0, 0, canvasH.width, canvasH.height);
+        const vx = (sw - vw) / 2;
+        const vy = (sh - vh) / 2;
+        ctxV.drawImage(video, vx, vy, vw, vh, 0, 0, canvasV.width, canvasV.height);
 
-        // janela 9:16 dentro da mesma região 16:9, deslocada pelo crop arrastável
-        const vw = (hh * 9) / 16;
-        const crop = Math.min(1, Math.max(0, cropXRef.current ?? 0.5));
-        const vx = hx + crop * (hw - vw);
-        ctxV.drawImage(video, vx, hy, vw, hh, 0, 0, canvasV.width, canvasV.height);
+        // 16:9 derivado — mesma largura da vertical, recorte vertical interno
+        const hw = vw;
+        const hh = (vw * 9) / 16;
+        const hx = vx;
+        const crop = Math.min(1, Math.max(0, cropYRef.current ?? 0.5));
+        const panRangeY = Math.max(0, vh - hh);
+        const hy = vy + (panRangeY > 0 ? crop * panRangeY : (vh - hh) / 2);
+        ctxH.drawImage(video, hx, hy, hw, hh, 0, 0, canvasH.width, canvasH.height);
       }
       schedule();
     };
@@ -104,7 +107,7 @@ export default function DualCanvasRenderer({
       cancelAnimationFrame(rafId);
       video.srcObject = null;
     };
-  }, [stream, resolution, cropXRef, canvasHRef, canvasVRef]);
+  }, [stream, resolution, cropYRef, canvasHRef, canvasVRef]);
 
   return <video ref={videoRef} muted playsInline className="hidden" />;
 }
