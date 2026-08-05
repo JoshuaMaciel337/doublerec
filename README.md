@@ -17,7 +17,7 @@ Abra [http://localhost:3000](http://localhost:3000) no Chrome e permita o acesso
 
 ## Autenticação
 
-O app é protegido por login (Supabase Auth, e-mail/senha). Sem sessão válida, qualquer rota redireciona para `/login` — a checagem acontece no `proxy.ts` (redirecionamento) e no layout do estúdio no servidor (proteção real). As credenciais de conexão ficam em `.env.local`:
+O app é protegido por login (Supabase Auth, e-mail/senha). A checagem de sessão acontece em Server Components (`app/(studio)/layout.tsx` redireciona para `/login` sem usuário; `app/login/layout.tsx` redireciona para `/` já logado) — sem depender de middleware/proxy, seguindo a recomendação do próprio Next.js de não usar essa camada como limite de autenticação. As credenciais de conexão ficam em `.env.local`:
 
 ```
 NEXT_PUBLIC_SUPABASE_URL=...
@@ -25,6 +25,30 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
 ```
 
 Os usuários são criados no painel do Supabase (Authentication → Users). Para sair, use o botão de logout na barra superior do estúdio.
+
+## Deploy no Cloudflare Workers
+
+O projeto já está preparado para o adaptador [`@opennextjs/cloudflare`](https://opennext.js.org/cloudflare), a forma oficial de rodar Next.js com SSR completo no Cloudflare (o antigo "Cloudflare Pages" não suporta bem App Router com SSR).
+
+**Configuração no painel da Cloudflare (Workers & Pages → Create → Workers → Connect to Git):**
+
+1. Conecte o repositório `JoshuaMaciel337/doublerec`.
+2. Build command: `npx opennextjs-cloudflare build`
+3. Deploy command: `npx opennextjs-cloudflare deploy`
+4. Em **Settings → Environment variables**, adicione `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` com os mesmos valores do `.env.local`.
+5. Salve — o Cloudflare builda e publica automaticamente a cada push na branch principal.
+
+**Deploy manual (linha de comando, requer login via `npx wrangler login`):**
+
+```bash
+npm run deploy
+```
+
+Antes de rodar localmente, crie o arquivo `.dev.vars` na raiz (ignorado pelo git):
+
+```
+NEXTJS_ENV=development
+```
 
 > A API de câmera (`getUserMedia`) só funciona em contexto seguro: `localhost` ou HTTPS. Para testar no celular na mesma rede, use um túnel HTTPS (ex.: `npx ngrok http 3000`) ou configure certificado local.
 
