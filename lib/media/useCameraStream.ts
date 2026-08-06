@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CaptureMode,
   EMPTY_FEATURES,
   FacingMode,
   Fps,
@@ -18,6 +19,12 @@ export interface CameraStreamOptions {
   resolution: Resolution;
   fps: Fps;
   facing: FacingMode;
+  /**
+   * Posição do aparelho. Não entra nas constraints: serve só para reabrir a
+   * câmera quando o usuário gira, já que o navegador orienta o quadro apenas
+   * no momento da abertura.
+   */
+  deviceOrientation: CaptureMode;
 }
 
 export interface DeviceLists {
@@ -86,7 +93,14 @@ export function useCameraStream(options: CameraStreamOptions) {
   const streamRef = useRef<MediaStream | null>(null);
   const maxSizeCacheRef = useRef<Size | null>(null);
 
-  const { videoDeviceId, audioDeviceId, resolution, fps, facing } = options;
+  const {
+    videoDeviceId,
+    audioDeviceId,
+    resolution,
+    fps,
+    facing,
+    deviceOrientation,
+  } = options;
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +185,14 @@ export function useCameraStream(options: CameraStreamOptions) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [videoDeviceId, audioDeviceId, resolution, fps, facing]);
+  }, [
+    videoDeviceId,
+    audioDeviceId,
+    resolution,
+    fps,
+    facing,
+    deviceOrientation,
+  ]);
 
   // ao trocar de câmera o teto pode mudar
   useEffect(() => {

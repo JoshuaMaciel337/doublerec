@@ -66,6 +66,25 @@ function readAutoSavePreference(): boolean {
   }
 }
 
+// o formato principal fica com toda a área que sobra; o derivado é uma miniatura
+const PRIMARY_WRAP =
+  "order-1 flex min-h-0 min-w-0 flex-1 items-center justify-center self-stretch";
+const SECONDARY_WRAP =
+  "order-2 flex flex-none items-center justify-center self-stretch";
+/** 9:16 principal: sempre limitado pela altura */
+const PRIMARY_TALL = "h-full";
+/** 16:9 principal: limitado pela largura em tela em pé, pela altura deitado */
+const PRIMARY_WIDE = "w-full landscape:h-full landscape:w-auto";
+const SECONDARY_PREVIEW =
+  "h-[13vh] max-h-[128px] w-auto landscape:h-[68%] landscape:max-h-full";
+
+function readDeviceOrientation(): CaptureMode {
+  if (typeof window === "undefined") return "portrait";
+  return window.matchMedia("(orientation: landscape)").matches
+    ? "landscape"
+    : "portrait";
+}
+
 interface MediaPreview {
   kind: CaptureKind;
   horizontalUrl: string;
@@ -126,6 +145,8 @@ export default function StudioPage() {
   const [fileName, setFileName] = useState("video");
   const [autoSave, setAutoSave] = useState(readAutoSavePreference);
   const [captureKind, setCaptureKind] = useState<CaptureKind>("video");
+  const [deviceOrientation, setDeviceOrientation] =
+    useState<CaptureMode>(readDeviceOrientation);
 
   // tratamento de imagem
   const [filterId, setFilterId] = useState<FilterId>("none");
@@ -194,6 +215,7 @@ export default function StudioPage() {
     resolution,
     fps,
     facing,
+    deviceOrientation,
   });
 
   const recorder = useDualRecorder();
@@ -204,7 +226,7 @@ export default function StudioPage() {
   // quem define o principal é a orientação do frame que a câmera entrega, que
   // por sua vez segue a posição do aparelho: é esse formato que tem a abertura
   // cheia, então a tela inteira precisa seguir a realidade
-  const frameMode: CaptureMode = outputSize?.mode ?? "portrait";
+  const frameMode: CaptureMode = outputSize?.mode ?? deviceOrientation;
   const portraitPrimary = frameMode === "portrait";
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
@@ -373,6 +395,30 @@ export default function StudioPage() {
     );
     return () => window.clearTimeout(id);
   }, [frameMode]);
+
+  // o navegador só orienta o quadro no momento em que a câmera é aberta: girar
+  // o aparelho não mexe na track que já está rodando, então reabrimos
+  useEffect(() => {
+    // no desktop "orientação" é só o formato da janela: redimensionar não deve
+    // reabrir a câmera
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+
+    const query = window.matchMedia("(orientation: landscape)");
+    const sync = () => {
+      if (recordingRef.current) return;
+      setDeviceOrientation(query.matches ? "landscape" : "portrait");
+    };
+    sync();
+
+    const screenOrientation = window.screen?.orientation;
+    query.addEventListener("change", sync);
+    screenOrientation?.addEventListener("change", sync);
+    return () => {
+      query.removeEventListener("change", sync);
+      screenOrientation?.removeEventListener("change", sync);
+    };
+    // reexecuta ao parar de gravar para aplicar uma rotação feita durante a take
+  }, [recording]);
 
   // cada troca de orientação ou de dispositivo reabre a câmera em automático:
   // este é o ponto único que empurra as escolhas do usuário para a track nova
@@ -774,42 +820,22 @@ export default function StudioPage() {
           </div>
         ) : (
           <>
-            <div
-              className={`flex min-h-0 items-center justify-center landscape:h-full landscape:self-stretch ${
-                portraitPrimary
-                  ? "order-1 w-full flex-1 landscape:w-auto landscape:flex-none"
-                  : "order-2 shrink-0"
-              }`}
-            >
+            <div className={portraitPrimary ? PRIMARY_WRAP : SECONDARY_WRAP}>
               <CameraPreview
                 canvasRef={canvasVRef}
                 aspect="vertical"
                 grid={grid}
-                className={
-                  portraitPrimary
-                    ? "h-full"
-                    : "h-[18vh] max-h-full w-auto landscape:h-full"
-                }
+                className={portraitPrimary ? PRIMARY_TALL : SECONDARY_PREVIEW}
               >
                 {cropTools(portraitPrimary)}
               </CameraPreview>
             </div>
-            <div
-              className={`flex items-center justify-center landscape:h-full landscape:min-h-0 landscape:self-stretch ${
-                portraitPrimary
-                  ? "order-2 w-full landscape:w-auto"
-                  : "order-1 min-h-0 w-full flex-1 landscape:w-auto landscape:flex-none"
-              }`}
-            >
+            <div className={portraitPrimary ? SECONDARY_WRAP : PRIMARY_WRAP}>
               <CameraPreview
                 canvasRef={canvasHRef}
                 aspect="horizontal"
                 grid={grid}
-                className={
-                  portraitPrimary
-                    ? "w-full max-w-[560px] landscape:h-full landscape:w-auto landscape:max-w-none"
-                    : "h-full max-h-full w-auto max-w-full"
-                }
+                className={portraitPrimary ? SECONDARY_PREVIEW : PRIMARY_WIDE}
               >
                 {cropTools(!portraitPrimary)}
               </CameraPreview>
