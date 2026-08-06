@@ -87,6 +87,10 @@ export function useCameraStream(options: CameraStreamOptions) {
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const maxSizeCacheRef = useRef<Size | null>(null);
+  // alguns navegadores (Safari no iOS) devolvem o frame girado em relação ao
+  // que pedimos; guardamos por câmera/modo qual formato de pedido funcionou
+  const shapePrefRef = useRef<Map<string, boolean>>(new Map());
+  const unfixableRef = useRef<Set<string>>(new Set());
 
   const { videoDeviceId, audioDeviceId, resolution, fps, facing, captureMode } =
     options;
@@ -108,15 +112,16 @@ export function useCameraStream(options: CameraStreamOptions) {
         maxSizeCacheRef.current = maxSize;
       }
 
-      const size = captureSize(resolution, captureMode, maxSize);
-      const video: MediaTrackConstraints = {
-        width: { ideal: size.width },
-        height: { ideal: size.height },
-        aspectRatio: { ideal: size.width / size.height },
-        frameRate: { ideal: fps },
-      };
-      if (videoDeviceId) video.deviceId = { exact: videoDeviceId };
-      else video.facingMode = { ideal: facing };
+      const base = captureSize(resolution, captureMode, maxSize);
+      const shapeKey = `${videoDeviceId ?? facing}|${captureMode}|${resolution}`;
+      const known = shapePrefRef.current.get(shapeKey);
+      // tentamos o pedido "honesto" e, se o frame vier girado, repetimos com
+      // width/height invertidos — a não ser que já saibamos que nenhum resolve
+      const attempts = unfixableRef.current.has(shapeKey)
+        ? [known ?? false]
+        : known === undefined
+          ? [false, true]
+          : [known, !known];
 
       const audio: MediaTrackConstraints = {
         echoCancellation: true,
@@ -125,31 +130,60 @@ export function useCameraStream(options: CameraStreamOptions) {
       if (audioDeviceId) audio.deviceId = { exact: audioDeviceId };
 
       try {
-        const media = await navigator.mediaDevices.getUserMedia({
-          video,
-          audio,
-        });
-        if (cancelled) {
-          media.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = media;
-        const track = media.getVideoTracks()[0] ?? null;
-        const nextFeatures = getTrackFeatures(track);
-        // se a track agora declara um teto maior, guardamos para a próxima abertura
-        if (nextFeatures.maxSize) {
-          maxSizeCacheRef.current = nextFeatures.maxSize;
-        }
-        setStream(media);
-        setFeatures(nextFeatures);
+        for (let i = 0; i < attempts.length; i += 1) {
+          const swap = attempts[i];
+          const size = swap
+            ? { width: base.height, height: base.width }
+            : base;
+          // sem aspectRatio: no iOS ele faz o Safari escolher um modo girado
+          const video: MediaTrackConstraints = {
+            width: { ideal: size.width },
+            height: { ideal: size.height },
+            frameRate: { ideal: fps },
+          };
+          if (videoDeviceId) video.deviceId = { exact: videoDeviceId };
+          else video.facingMode = { ideal: facing };
 
-        // labels só ficam disponíveis depois da permissão concedida
-        const all = await navigator.mediaDevices.enumerateDevices();
-        if (!cancelled) {
-          setDevices({
-            cameras: all.filter((d) => d.kind === "videoinput"),
-            microphones: all.filter((d) => d.kind === "audioinput"),
+          const media = await navigator.mediaDevices.getUserMedia({
+            video,
+            audio,
           });
+          if (cancelled) {
+            media.getTracks().forEach((t) => t.stop());
+            return;
+          }
+
+          const track = media.getVideoTracks()[0] ?? null;
+          const settings = track?.getSettings();
+          const sw = settings?.width ?? 0;
+          const sh = settings?.height ?? 0;
+          const oriented =
+            !sw || !sh || (captureMode === "portrait" ? sh >= sw : sw >= sh);
+
+          if (!oriented && i < attempts.length - 1) {
+            media.getTracks().forEach((t) => t.stop());
+            continue;
+          }
+          if (oriented) shapePrefRef.current.set(shapeKey, swap);
+          else unfixableRef.current.add(shapeKey);
+          streamRef.current = media;
+          const nextFeatures = getTrackFeatures(track);
+          // se a track agora declara um teto maior, guardamos para a próxima abertura
+          if (nextFeatures.maxSize) {
+            maxSizeCacheRef.current = nextFeatures.maxSize;
+          }
+          setStream(media);
+          setFeatures(nextFeatures);
+
+          // labels só ficam disponíveis depois da permissão concedida
+          const all = await navigator.mediaDevices.enumerateDevices();
+          if (!cancelled) {
+            setDevices({
+              cameras: all.filter((d) => d.kind === "videoinput"),
+              microphones: all.filter((d) => d.kind === "audioinput"),
+            });
+          }
+          return;
         }
       } catch (err) {
         if (!cancelled) {

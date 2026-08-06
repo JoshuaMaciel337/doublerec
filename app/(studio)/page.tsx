@@ -27,6 +27,7 @@ import {
   RESOLUTION_LABELS,
   Resolution,
   StartTimer,
+  aspectFor,
   videoBitrate,
 } from "@/lib/media/capabilities";
 import {
@@ -159,6 +160,8 @@ export default function StudioPage() {
   const [outputSize, setOutputSize] = useState<{
     horizontal: { width: number; height: number };
     vertical: { width: number; height: number };
+    source: { width: number; height: number };
+    fraction: number;
   } | null>(null);
 
   // posição do formato derivado dentro do principal
@@ -205,8 +208,30 @@ export default function StudioPage() {
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
   const isoValue = isoOverride ?? features.iso?.current ?? 0;
+  const primaryCanvas = portraitPrimary
+    ? outputSize?.vertical
+    : outputSize?.horizontal;
+  // gravar a track da câmera direto só vale quando o frame já é exatamente o
+  // formato principal; senão o arquivo sairia com o aspecto do sensor
+  const sourceIsPrimary =
+    !!outputSize &&
+    !!primaryCanvas &&
+    Math.abs(
+      outputSize.source.width / outputSize.source.height -
+        aspectFor(captureMode),
+    ) < 0.03 &&
+    Math.abs(primaryCanvas.width - outputSize.source.width) <= 4 &&
+    Math.abs(primaryCanvas.height - outputSize.source.height) <= 4;
   const directPrimary =
-    filterId === "none" && isNeutral(adjustments);
+    filterId === "none" && isNeutral(adjustments) && sourceIsPrimary;
+
+  const sourceLabel = outputSize?.source ?? features.activeSize ?? null;
+  const outputsLabel = (() => {
+    if (!outputSize) return null;
+    const v = `9:16 ${outputSize.vertical.width}×${outputSize.vertical.height}`;
+    const h = `16:9 ${outputSize.horizontal.width}×${outputSize.horizontal.height}`;
+    return portraitPrimary ? `${v} · ${h}` : `${h} · ${v}`;
+  })();
 
   useEffect(() => {
     recordingRef.current = recording;
@@ -596,6 +621,7 @@ export default function StudioPage() {
           axis={portraitPrimary ? "y" : "x"}
           value={crop}
           label={derivedLabel}
+          fraction={outputSize?.fraction}
           onChange={handleCropChange}
           onConfirm={() => setCropEditing(false)}
         />
@@ -743,12 +769,10 @@ export default function StudioPage() {
       <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400">
         <span>
           {RESOLUTION_LABELS[resolution]} · {QUALITY_LABELS[quality]}
-          {outputSize
-            ? ` · ${outputSize.horizontal.width}×${outputSize.horizontal.height} + ${outputSize.vertical.width}×${outputSize.vertical.height}`
-            : features.activeSize
-              ? ` · cam ${features.activeSize.width}×${features.activeSize.height}`
-              : ""}{" "}
-          · {fps} fps
+          {sourceLabel
+            ? ` · cam ${sourceLabel.width}×${sourceLabel.height}`
+            : ""}
+          {outputsLabel ? ` · ${outputsLabel}` : ""} · {fps} fps
           {directPrimary ? " · principal direto" : " · via canvas"}
           {recorder.activeCodec ? ` · ${recorder.activeCodec}` : ""}
         </span>

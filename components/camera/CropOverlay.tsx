@@ -3,7 +3,7 @@
 import { PointerEvent, useRef } from "react";
 
 // proporção do formato derivado dentro do principal: (9/16) / (16/9)
-const BOX_FRACTION = 81 / 256;
+const DEFAULT_BOX_FRACTION = 81 / 256;
 
 interface CropOverlayProps {
   /** eixo em que o recorte desliza: "y" em retrato, "x" em paisagem */
@@ -11,6 +11,8 @@ interface CropOverlayProps {
   /** posição normalizada 0..1 */
   value: number;
   label: string;
+  /** tamanho real do recorte derivado em relação ao principal */
+  fraction?: number;
   onChange: (value: number) => void;
   onConfirm: () => void;
 }
@@ -23,18 +25,23 @@ export default function CropOverlay({
   axis,
   value,
   label,
+  fraction,
   onChange,
   onConfirm,
 }: CropOverlayProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
+  const boxFraction = Math.min(
+    1,
+    Math.max(0.05, fraction ?? DEFAULT_BOX_FRACTION),
+  );
 
   const updateFromPointer = (clientX: number, clientY: number) => {
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const total = axis === "y" ? rect.height : rect.width;
-    const boxSize = total * BOX_FRACTION;
+    const boxSize = total * boxFraction;
     const pointer =
       axis === "y" ? clientY - rect.top : clientX - rect.left;
     const range = total - boxSize;
@@ -56,8 +63,8 @@ export default function CropOverlay({
     draggingRef.current = false;
   };
 
-  const startPercent = value * (1 - BOX_FRACTION) * 100;
-  const boxPercent = BOX_FRACTION * 100;
+  const startPercent = value * (1 - boxFraction) * 100;
+  const boxPercent = boxFraction * 100;
   const endPercent = 100 - startPercent - boxPercent;
 
   return (

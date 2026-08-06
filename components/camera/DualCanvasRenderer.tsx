@@ -3,8 +3,13 @@
 import { RefObject, useEffect, useRef } from "react";
 import {
   CaptureMode,
+  LANDSCAPE_ASPECT,
+  PORTRAIT_ASPECT,
+  Rect,
   Resolution,
   canvasSizesForSource,
+  coverRect,
+  derivedFraction,
 } from "@/lib/media/capabilities";
 import { FilterTint } from "@/lib/media/filters";
 
@@ -35,6 +40,10 @@ interface DualCanvasRendererProps {
   onOutputSize?: (info: {
     horizontal: { width: number; height: number };
     vertical: { width: number; height: number };
+    /** frame que a câmera está entregando */
+    source: { width: number; height: number };
+    /** tamanho do recorte derivado em relação ao principal (0..1) */
+    fraction: number;
   }) => void;
 }
 
@@ -43,10 +52,10 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 };
 
 /**
- * O formato principal recebe o maior recorte possível do frame da câmera
- * (cover) e o outro formato é derivado deslizando dentro dessa mesma região.
- * Os canvases são dimensionados pelos pixels reais do sensor — o recorte
- * derivado nunca é esticado além do que a câmera entregou.
+ * Cada formato recorta o frame da câmera por conta própria: os dois usam a
+ * maior área possível do sensor para o seu aspecto, então nenhum deles é
+ * recorte de recorte. O principal fica centralizado (abertura máxima) e o
+ * derivado é o que desliza pelo eixo com folga.
  */
 export default function DualCanvasRenderer({
   stream,
@@ -60,7 +69,10 @@ export default function DualCanvasRenderer({
 }: DualCanvasRendererProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onOutputSizeRef = useRef(onOutputSize);
-  onOutputSizeRef.current = onOutputSize;
+
+  useEffect(() => {
+    onOutputSizeRef.current = onOutputSize;
+  }, [onOutputSize]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -123,7 +135,7 @@ export default function DualCanvasRenderer({
     };
 
     const ensureCanvasSize = (sourceW: number, sourceH: number) => {
-      const sizes = canvasSizesForSource(resolution, mode, sourceW, sourceH);
+      const sizes = canvasSizesForSource(resolution, sourceW, sourceH);
       const changed =
         canvasH.width !== sizes.horizontal.width ||
         canvasH.height !== sizes.horizontal.height ||
@@ -138,21 +150,32 @@ export default function DualCanvasRenderer({
       }
       if (!sized || changed) {
         sized = true;
-        onOutputSizeRef.current?.(sizes);
+        onOutputSizeRef.current?.({
+          ...sizes,
+          source: { width: sourceW, height: sourceH },
+          fraction: derivedFraction(mode, sourceW, sourceH),
+        });
       }
     };
 
     const paint = (
       ctx: CanvasRenderingContext2D,
       canvas: HTMLCanvasElement,
-      sx: number,
-      sy: number,
-      sw: number,
-      sh: number,
+      rect: Rect,
       settings: RenderSettings,
     ) => {
       ctx.filter = settings.filter;
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(
+        video,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
       ctx.filter = "none";
 
       if (settings.tint) {
@@ -193,37 +216,25 @@ export default function DualCanvasRenderer({
 
         const settings = settingsRef.current ?? DEFAULT_RENDER_SETTINGS;
         const crop = Math.min(1, Math.max(0, cropRef.current ?? 0.5));
+        const portrait = mode === "portrait";
 
-        // cover do formato principal dentro do frame da câmera
-        const primaryAspect = mode === "portrait" ? 9 / 16 : 16 / 9;
-        let pw = sourceW;
-        let ph = sourceW / primaryAspect;
-        if (ph > sourceH) {
-          ph = sourceH;
-          pw = sourceH * primaryAspect;
-        }
-        const px = (sourceW - pw) / 2;
-        const py = (sourceH - ph) / 2;
+        // o principal fica centralizado e o derivado desliza; só um dos eixos
+        // tem folga, no outro o crop não muda nada
+        const vertical = coverRect(
+          sourceW,
+          sourceH,
+          PORTRAIT_ASPECT,
+          portrait ? 0.5 : crop,
+        );
+        const horizontal = coverRect(
+          sourceW,
+          sourceH,
+          LANDSCAPE_ASPECT,
+          portrait ? crop : 0.5,
+        );
 
-        // maior retângulo do formato derivado que cabe no principal
-        const derivedAspect = mode === "portrait" ? 16 / 9 : 9 / 16;
-        let dw = pw;
-        let dh = pw / derivedAspect;
-        if (dh > ph) {
-          dh = ph;
-          dw = ph * derivedAspect;
-        }
-        // só um dos eixos tem folga; no outro o range é zero e o crop não afeta
-        const dx = px + crop * (pw - dw);
-        const dy = py + crop * (ph - dh);
-
-        if (mode === "portrait") {
-          paint(ctxV, canvasV, px, py, pw, ph, settings);
-          paint(ctxH, canvasH, dx, dy, dw, dh, settings);
-        } else {
-          paint(ctxH, canvasH, px, py, pw, ph, settings);
-          paint(ctxV, canvasV, dx, dy, dw, dh, settings);
-        }
+        paint(ctxV, canvasV, vertical, settings);
+        paint(ctxH, canvasH, horizontal, settings);
       }
       schedule();
     };

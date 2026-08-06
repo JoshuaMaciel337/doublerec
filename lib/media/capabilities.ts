@@ -117,56 +117,105 @@ export interface Size {
   height: number;
 }
 
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export const PORTRAIT_ASPECT = 9 / 16;
+export const LANDSCAPE_ASPECT = 16 / 9;
+
+export function aspectFor(mode: CaptureMode): number {
+  return mode === "portrait" ? PORTRAIT_ASPECT : LANDSCAPE_ASPECT;
+}
+
 /**
- * Dimensiona os dois canvases a partir do frame real da câmera.
- * Nunca inventa pixels: o formato principal é o cover 9:16/16:9 do sensor,
- * e o derivado é o recorte interno em escala 1:1. Em presets nomeados,
- * reduzimos (nunca aumentamos) para caber no alvo.
+ * Maior retângulo com o aspecto pedido que cabe no frame da câmera (cover),
+ * deslizado por `pos` no eixo que sobrar. Cada formato recorta o sensor por
+ * conta própria — nenhum deles é recorte de recorte.
+ */
+export function coverRect(
+  sourceW: number,
+  sourceH: number,
+  aspect: number,
+  pos = 0.5,
+): Rect {
+  let width = sourceW;
+  let height = sourceW / aspect;
+  if (height > sourceH) {
+    height = sourceH;
+    width = sourceH * aspect;
+  }
+  const clamped = Math.min(1, Math.max(0, pos));
+  return {
+    x: (sourceW - width) * clamped,
+    y: (sourceH - height) * clamped,
+    width,
+    height,
+  };
+}
+
+function fitToTarget(width: number, height: number, target: Size): Size {
+  // só reduz se a câmera entregou mais que o preset; nunca estica
+  const scale = Math.min(1, target.width / width, target.height / height);
+  return {
+    width: Math.round(width * scale),
+    height: Math.round(height * scale),
+  };
+}
+
+/**
+ * Dimensiona os dois canvases a partir do frame real da câmera. Cada formato
+ * usa a maior área possível do sensor para o seu aspecto, então o 9:16 abre
+ * toda a largura de um frame retrato e o 16:9 abre toda a largura também —
+ * um não é recorte do outro.
  */
 export function canvasSizesForSource(
   resolution: Resolution,
-  mode: CaptureMode,
   sourceW: number,
   sourceH: number,
 ): { horizontal: Size; vertical: Size } {
-  const primaryAspect = mode === "portrait" ? 9 / 16 : 16 / 9;
-  let pw = sourceW;
-  let ph = sourceW / primaryAspect;
-  if (ph > sourceH) {
-    ph = sourceH;
-    pw = sourceH * primaryAspect;
+  const vertical = coverRect(sourceW, sourceH, PORTRAIT_ASPECT);
+  const horizontal = coverRect(sourceW, sourceH, LANDSCAPE_ASPECT);
+
+  if (resolution === "native") {
+    return {
+      vertical: {
+        width: Math.round(vertical.width),
+        height: Math.round(vertical.height),
+      },
+      horizontal: {
+        width: Math.round(horizontal.width),
+        height: Math.round(horizontal.height),
+      },
+    };
   }
 
-  if (resolution !== "native") {
-    const target = RESOLUTIONS[resolution];
-    const targetPrimary =
-      mode === "portrait"
-        ? { width: target.height, height: target.width }
-        : { width: target.width, height: target.height };
-    // só reduz se a câmera entregou mais que o preset; nunca estica
-    const scale = Math.min(
-      1,
-      targetPrimary.width / pw,
-      targetPrimary.height / ph,
-    );
-    pw *= scale;
-    ph *= scale;
-  }
+  const target = RESOLUTIONS[resolution];
+  return {
+    vertical: fitToTarget(vertical.width, vertical.height, {
+      width: target.height,
+      height: target.width,
+    }),
+    horizontal: fitToTarget(horizontal.width, horizontal.height, target),
+  };
+}
 
-  const derivedAspect = mode === "portrait" ? 16 / 9 : 9 / 16;
-  let dw = pw;
-  let dh = pw / derivedAspect;
-  if (dh > ph) {
-    dh = ph;
-    dw = ph * derivedAspect;
-  }
-
-  const primary = { width: Math.round(pw), height: Math.round(ph) };
-  const derived = { width: Math.round(dw), height: Math.round(dh) };
-
-  return mode === "portrait"
-    ? { vertical: primary, horizontal: derived }
-    : { horizontal: primary, vertical: derived };
+/** Altura (ou largura) do recorte derivado em relação ao principal, 0..1 */
+export function derivedFraction(
+  mode: CaptureMode,
+  sourceW: number,
+  sourceH: number,
+): number {
+  const vertical = coverRect(sourceW, sourceH, PORTRAIT_ASPECT);
+  const horizontal = coverRect(sourceW, sourceH, LANDSCAPE_ASPECT);
+  const fraction =
+    mode === "portrait"
+      ? horizontal.height / vertical.height
+      : vertical.width / horizontal.width;
+  return Math.min(1, Math.max(0.05, fraction));
 }
 
 export function formatSize(size: Size): string {
