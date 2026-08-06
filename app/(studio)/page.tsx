@@ -124,8 +124,6 @@ export default function StudioPage() {
   const [startTimer, setStartTimer] = useState<StartTimer>(0);
   const [grid, setGrid] = useState<GridMode>("3x3");
   const [fileName, setFileName] = useState("video");
-  const [captureMode, setCaptureMode] = useState<CaptureMode>("portrait");
-  const [autoRotate, setAutoRotate] = useState(true);
   const [autoSave, setAutoSave] = useState(readAutoSavePreference);
   const [captureKind, setCaptureKind] = useState<CaptureKind>("video");
 
@@ -177,7 +175,6 @@ export default function StudioPage() {
   const toastTimerRef = useRef<number | null>(null);
   const settingsRef = useRef<RenderSettings>(DEFAULT_RENDER_SETTINGS);
   const recordingRef = useRef(false);
-  const captureModeRef = useRef<CaptureMode>("portrait");
   const modeChangedRef = useRef(false);
   const autoSaveRef = useRef(true);
   const fileNameRef = useRef(fileName);
@@ -197,7 +194,6 @@ export default function StudioPage() {
     resolution,
     fps,
     facing,
-    captureMode,
   });
 
   const recorder = useDualRecorder();
@@ -205,9 +201,10 @@ export default function StudioPage() {
   const recording = recorder.state === "recording";
 
   const preset = getFilterPreset(filterId);
-  // quem define o principal é a orientação do frame que a câmera entrega:
-  // é ele que tem a abertura cheia, então a tela precisa seguir a realidade
-  const frameMode = outputSize?.mode ?? captureMode;
+  // quem define o principal é a orientação do frame que a câmera entrega, que
+  // por sua vez segue a posição do aparelho: é esse formato que tem a abertura
+  // cheia, então a tela inteira precisa seguir a realidade
+  const frameMode: CaptureMode = outputSize?.mode ?? "portrait";
   const portraitPrimary = frameMode === "portrait";
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
@@ -359,16 +356,6 @@ export default function StudioPage() {
     setCrop(value);
   }, []);
 
-  // trocar de orientação inverte o eixo do recorte: recomeça centralizado
-  const applyCaptureMode = useCallback((next: CaptureMode) => {
-    if (captureModeRef.current === next) return;
-    captureModeRef.current = next;
-    cropRef.current = 0.5;
-    setCrop(0.5);
-    setCropEditing(false);
-    setCaptureMode(next);
-  }, []);
-
   // aviso visual a cada troca de orientação, menos na montagem
   useEffect(() => {
     if (!modeChangedRef.current) {
@@ -409,29 +396,6 @@ export default function StudioPage() {
     applyExposure,
     applyIso,
   ]);
-
-  // rotação do aparelho troca a gravação principal
-  useEffect(() => {
-    if (!autoRotate) return;
-    // no desktop "orientação" é só o formato da janela: redimensionar não deve
-    // reabrir a câmera
-    if (!window.matchMedia("(pointer: coarse)").matches) return;
-
-    const query = window.matchMedia("(orientation: landscape)");
-    const sync = () => {
-      if (recordingRef.current) return;
-      applyCaptureMode(query.matches ? "landscape" : "portrait");
-    };
-    sync();
-
-    const orientation = window.screen?.orientation;
-    query.addEventListener("change", sync);
-    orientation?.addEventListener("change", sync);
-    return () => {
-      query.removeEventListener("change", sync);
-      orientation?.removeEventListener("change", sync);
-    };
-  }, [autoRotate, applyCaptureMode]);
 
   // estimativa de espaço/tempo restante
   useEffect(() => {
@@ -608,12 +572,15 @@ export default function StudioPage() {
     setGrid((g) => GRID_CYCLE[(GRID_CYCLE.indexOf(g) + 1) % GRID_CYCLE.length]);
   }, []);
 
+  // forçar a outra orientação faria o navegador recortar o quadro: a abertura
+  // cheia só existe na posição em que o aparelho está
   const handleToggleCaptureMode = useCallback(() => {
-    if (recordingRef.current) return;
-    applyCaptureMode(
-      captureModeRef.current === "portrait" ? "landscape" : "portrait",
+    showToast(
+      portraitPrimary
+        ? "Vire o celular na horizontal para gravar em 16:9 com a câmera toda aberta."
+        : "Volte o celular para a vertical para gravar em 9:16 com a câmera toda aberta.",
     );
-  }, [applyCaptureMode]);
+  }, [portraitPrimary, showToast]);
 
   const handleLogout = useCallback(async () => {
     const supabase = createClient();
@@ -640,11 +607,12 @@ export default function StudioPage() {
         type="button"
         onClick={() => setCropEditing(true)}
         title={`Escolher o recorte ${derivedLabel}`}
-        className="absolute right-2 top-2 z-30 flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-1.5 text-[10px] font-semibold text-white ring-1 ring-white/20 backdrop-blur-sm transition-colors hover:bg-black/80"
+        aria-label={`Escolher o recorte ${derivedLabel}`}
+        className="absolute right-2 top-2 z-30 grid h-8 w-8 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 backdrop-blur-sm transition-colors hover:bg-black/80"
       >
         <svg
           viewBox="0 0 24 24"
-          className="h-3.5 w-3.5"
+          className="h-4 w-4"
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
@@ -654,7 +622,6 @@ export default function StudioPage() {
           <path d="M6 2v14a2 2 0 0 0 2 2h14" />
           <path d="M18 22V8a2 2 0 0 0-2-2H2" />
         </svg>
-        {derivedLabel}
       </button>
     );
   };
@@ -672,7 +639,7 @@ export default function StudioPage() {
       />
 
       {/* barra superior */}
-      <header className="flex items-center justify-between px-4 pt-3">
+      <header className="flex items-center justify-between px-4 pt-3 landscape:pt-1">
         <div className="flex items-center gap-1">
           <GhostButton
             label="Reiniciar sessão"
@@ -773,7 +740,7 @@ export default function StudioPage() {
       </header>
 
       {/* linha de status: resolução, tempo restante estimado e VU meter */}
-      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400 landscape:pt-0.5 landscape:text-[10px]">
         <span>
           {RESOLUTION_LABELS[resolution]} · {QUALITY_LABELS[quality]}
           {sourceLabel
@@ -788,7 +755,7 @@ export default function StudioPage() {
       </div>
 
       {/* previews */}
-      <main className="relative flex min-h-0 flex-1 flex-col items-center gap-3 px-4 py-3 md:flex-row md:items-center md:justify-center md:gap-6">
+      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-3 landscape:flex-row landscape:gap-4 landscape:py-1.5">
         {error ? (
           <div className="flex max-w-sm flex-col items-center gap-4 text-center">
             <p className="text-sm text-zinc-300">{error}</p>
@@ -808,8 +775,10 @@ export default function StudioPage() {
         ) : (
           <>
             <div
-              className={`flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
-                portraitPrimary ? "order-1 w-full flex-1" : "order-2 shrink-0"
+              className={`flex min-h-0 items-center justify-center landscape:h-full landscape:self-stretch ${
+                portraitPrimary
+                  ? "order-1 w-full flex-1 landscape:w-auto landscape:flex-none"
+                  : "order-2 shrink-0"
               }`}
             >
               <CameraPreview
@@ -819,17 +788,17 @@ export default function StudioPage() {
                 className={
                   portraitPrimary
                     ? "h-full"
-                    : "h-[18vh] max-h-full w-auto md:h-full"
+                    : "h-[18vh] max-h-full w-auto landscape:h-full"
                 }
               >
                 {cropTools(portraitPrimary)}
               </CameraPreview>
             </div>
             <div
-              className={`flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
+              className={`flex items-center justify-center landscape:h-full landscape:min-h-0 landscape:self-stretch ${
                 portraitPrimary
-                  ? "order-2 w-full"
-                  : "order-1 min-h-0 w-full flex-1"
+                  ? "order-2 w-full landscape:w-auto"
+                  : "order-1 min-h-0 w-full flex-1 landscape:w-auto landscape:flex-none"
               }`}
             >
               <CameraPreview
@@ -838,7 +807,7 @@ export default function StudioPage() {
                 grid={grid}
                 className={
                   portraitPrimary
-                    ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
+                    ? "w-full max-w-[560px] landscape:h-full landscape:w-auto landscape:max-w-none"
                     : "h-full max-h-full w-auto max-w-full"
                 }
               >
@@ -878,7 +847,6 @@ export default function StudioPage() {
         zoomLevel={zoomLevel}
         onCycleZoom={handleCycleZoom}
         captureMode={frameMode}
-        autoRotate={autoRotate}
         onToggleCaptureMode={handleToggleCaptureMode}
         filterLabel={filterId === "none" ? "Filtro" : preset.label}
         filterActive={filtersOpen || filterId !== "none"}
@@ -919,10 +887,6 @@ export default function StudioPage() {
         onStartTimerChange={setStartTimer}
         grid={grid}
         onGridChange={setGrid}
-        captureMode={captureMode}
-        onCaptureModeChange={applyCaptureMode}
-        autoRotate={autoRotate}
-        onAutoRotateChange={setAutoRotate}
         autoSave={autoSave}
         onAutoSaveChange={handleAutoSaveChange}
         fileName={fileName}
@@ -976,9 +940,10 @@ export default function StudioPage() {
               TikTok, Shorts) e horizontal 16:9 (YouTube).
             </p>
             <p className="mb-4 text-xs leading-relaxed text-zinc-500">
-              O formato principal sai em resolução cheia e o outro é um recorte
-              dele. Vire o celular para trocar qual é o principal, ou use a pill
-              de orientação. Com “Salvar na hora” (ligado por padrão), ao parar
+              O formato principal usa a abertura inteira da câmera e o outro é
+              um recorte dele. Quem manda é a posição do aparelho: em pé, o
+              principal é o 9:16; deitado, o 16:9. Com “Salvar na hora” (ligado
+              por padrão), ao parar
               as duas versões já vão para Downloads — em evento você grava take
               atrás de take sem abrir a tela de download. No celular, o aviso
               também oferece a opção de mandar para a Galeria quando o navegador

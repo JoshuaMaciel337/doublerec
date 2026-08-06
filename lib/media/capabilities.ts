@@ -51,26 +51,25 @@ export const RESOLUTION_LABELS: Record<Resolution, string> = {
 };
 
 /**
- * Resolução pedida à câmera. Em "native" pedimos o máximo que o aparelho
- * declarar (ou 8K ideal, se a API não expuser o teto).
+ * Resolução pedida à câmera, sempre na forma natural do sensor (lado maior na
+ * largura). Pedir uma orientação específica faz o navegador recortar o quadro
+ * em vez de girá-lo; quem decide a orientação é a posição do aparelho.
+ * Em "native" pedimos o máximo que o aparelho declarar (ou 8K ideal).
  */
 export function captureSize(
   resolution: Resolution,
-  mode: CaptureMode,
   maxSize?: { width: number; height: number } | null,
 ) {
   if (resolution === "native") {
     const width = maxSize?.width ?? 8192;
     const height = maxSize?.height ?? 8192;
-    // pedimos o maior eixo possível; o aspectRatio do modo guia o crop
-    return mode === "portrait"
-      ? { width: Math.min(width, height), height: Math.max(width, height) }
-      : { width: Math.max(width, height), height: Math.min(width, height) };
+    return {
+      width: Math.max(width, height),
+      height: Math.min(width, height),
+    };
   }
   const res = RESOLUTIONS[resolution];
-  return mode === "portrait"
-    ? { width: res.height, height: res.width }
-    : { width: res.width, height: res.height };
+  return { width: res.width, height: res.height };
 }
 
 const BASE_BITRATES: Record<Exclude<Resolution, "native">, number> = {

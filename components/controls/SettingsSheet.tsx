@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  CaptureMode,
   Fps,
   GridMode,
   QUALITY_LABELS,
@@ -35,10 +34,6 @@ interface SettingsSheetProps {
   onStartTimerChange: (t: StartTimer) => void;
   grid: GridMode;
   onGridChange: (g: GridMode) => void;
-  captureMode: CaptureMode;
-  onCaptureModeChange: (m: CaptureMode) => void;
-  autoRotate: boolean;
-  onAutoRotateChange: (value: boolean) => void;
   autoSave: boolean;
   onAutoSaveChange: (value: boolean) => void;
   fileName: string;
@@ -109,10 +104,6 @@ export default function SettingsSheet({
   onStartTimerChange,
   grid,
   onGridChange,
-  captureMode,
-  onCaptureModeChange,
-  autoRotate,
-  onAutoRotateChange,
   autoSave,
   onAutoSaveChange,
   fileName,
@@ -170,24 +161,6 @@ export default function SettingsSheet({
                 </option>
               ))}
             </select>
-          </Field>
-
-          <Field label="Gravação principal">
-            <Segmented
-              options={["portrait", "landscape"] as const}
-              value={captureMode}
-              onChange={onCaptureModeChange}
-              format={(v) => (v === "portrait" ? "Em pé 9:16" : "Deitado 16:9")}
-            />
-          </Field>
-
-          <Field label="Girar com o celular">
-            <Segmented
-              options={[true, false] as const}
-              value={autoRotate}
-              onChange={onAutoRotateChange}
-              format={(v) => (v ? "Automático" : "Manual")}
-            />
           </Field>
 
           <Field label="Ao parar / tirar foto">
