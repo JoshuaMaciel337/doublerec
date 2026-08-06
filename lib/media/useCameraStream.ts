@@ -77,6 +77,40 @@ async function probeMaxSize(
   }
 }
 
+/**
+ * Mede o frame como ele realmente chega em um <video>. `getSettings()` pode
+ * devolver o modo do sensor, e não o quadro já girado que o navegador entrega —
+ * é essa diferença que fazia o formato principal sair recortado.
+ */
+async function measureFrame(media: MediaStream): Promise<Size | null> {
+  if (typeof document === "undefined") return null;
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = media;
+  void video.play().catch(() => {
+    // só precisamos dos metadados; reprodução pode ser bloqueada
+  });
+  try {
+    return await new Promise<Size | null>((resolve) => {
+      const timer = window.setTimeout(() => resolve(null), 1500);
+      const finish = () => {
+        if (!video.videoWidth || !video.videoHeight) return;
+        window.clearTimeout(timer);
+        resolve({ width: video.videoWidth, height: video.videoHeight });
+      };
+      video.onloadedmetadata = finish;
+      video.onresize = finish;
+      finish();
+    });
+  } finally {
+    video.onloadedmetadata = null;
+    video.onresize = null;
+    video.pause();
+    video.srcObject = null;
+  }
+}
+
 export function useCameraStream(options: CameraStreamOptions) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [features, setFeatures] = useState<TrackFeatures>(EMPTY_FEATURES);
@@ -154,9 +188,14 @@ export function useCameraStream(options: CameraStreamOptions) {
           }
 
           const track = media.getVideoTracks()[0] ?? null;
+          const measured = await measureFrame(media);
+          if (cancelled) {
+            media.getTracks().forEach((t) => t.stop());
+            return;
+          }
           const settings = track?.getSettings();
-          const sw = settings?.width ?? 0;
-          const sh = settings?.height ?? 0;
+          const sw = measured?.width ?? settings?.width ?? 0;
+          const sh = measured?.height ?? settings?.height ?? 0;
           const oriented =
             !sw || !sh || (captureMode === "portrait" ? sh >= sw : sw >= sh);
 

@@ -29,8 +29,6 @@ export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
 interface DualCanvasRendererProps {
   stream: MediaStream | null;
   resolution: Resolution;
-  /** orientação da gravação principal */
-  mode: CaptureMode;
   /** posição normalizada (0..1) do formato derivado dentro do principal */
   cropRef: RefObject<number>;
   settingsRef: RefObject<RenderSettings>;
@@ -42,6 +40,8 @@ interface DualCanvasRendererProps {
     vertical: { width: number; height: number };
     /** frame que a câmera está entregando */
     source: { width: number; height: number };
+    /** formato principal de fato, deduzido da orientação do frame */
+    mode: CaptureMode;
     /** tamanho do recorte derivado em relação ao principal (0..1) */
     fraction: number;
   }) => void;
@@ -54,13 +54,12 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 /**
  * Cada formato recorta o frame da câmera por conta própria: os dois usam a
  * maior área possível do sensor para o seu aspecto, então nenhum deles é
- * recorte de recorte. O principal fica centralizado (abertura máxima) e o
- * derivado é o que desliza pelo eixo com folga.
+ * recorte de recorte. Quem manda é a orientação do frame que chega — o formato
+ * que combina com ela é o principal (abertura cheia) e o outro é o que desliza.
  */
 export default function DualCanvasRenderer({
   stream,
   resolution,
-  mode,
   cropRef,
   settingsRef,
   canvasHRef,
@@ -150,10 +149,13 @@ export default function DualCanvasRenderer({
       }
       if (!sized || changed) {
         sized = true;
+        const frameMode: CaptureMode =
+          sourceH >= sourceW ? "portrait" : "landscape";
         onOutputSizeRef.current?.({
           ...sizes,
           source: { width: sourceW, height: sourceH },
-          fraction: derivedFraction(mode, sourceW, sourceH),
+          mode: frameMode,
+          fraction: derivedFraction(frameMode, sourceW, sourceH),
         });
       }
     };
@@ -216,7 +218,8 @@ export default function DualCanvasRenderer({
 
         const settings = settingsRef.current ?? DEFAULT_RENDER_SETTINGS;
         const crop = Math.min(1, Math.max(0, cropRef.current ?? 0.5));
-        const portrait = mode === "portrait";
+        // o formato que acompanha a orientação do frame é o principal
+        const portrait = sourceH >= sourceW;
 
         // o principal fica centralizado e o derivado desliza; só um dos eixos
         // tem folga, no outro o crop não muda nada
@@ -246,7 +249,7 @@ export default function DualCanvasRenderer({
       cancelAnimationFrame(rafId);
       video.srcObject = null;
     };
-  }, [stream, resolution, mode, cropRef, settingsRef, canvasHRef, canvasVRef]);
+  }, [stream, resolution, cropRef, settingsRef, canvasHRef, canvasVRef]);
 
   return <video ref={videoRef} muted playsInline className="hidden" />;
 }

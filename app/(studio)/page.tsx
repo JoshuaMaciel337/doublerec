@@ -161,6 +161,7 @@ export default function StudioPage() {
     horizontal: { width: number; height: number };
     vertical: { width: number; height: number };
     source: { width: number; height: number };
+    mode: CaptureMode;
     fraction: number;
   } | null>(null);
 
@@ -204,7 +205,10 @@ export default function StudioPage() {
   const recording = recorder.state === "recording";
 
   const preset = getFilterPreset(filterId);
-  const portraitPrimary = captureMode === "portrait";
+  // quem define o principal é a orientação do frame que a câmera entrega:
+  // é ele que tem a abertura cheia, então a tela precisa seguir a realidade
+  const frameMode = outputSize?.mode ?? captureMode;
+  const portraitPrimary = frameMode === "portrait";
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
   const isoValue = isoOverride ?? features.iso?.current ?? 0;
@@ -218,7 +222,7 @@ export default function StudioPage() {
     !!primaryCanvas &&
     Math.abs(
       outputSize.source.width / outputSize.source.height -
-        aspectFor(captureMode),
+        aspectFor(frameMode),
     ) < 0.03 &&
     Math.abs(primaryCanvas.width - outputSize.source.width) <= 4 &&
     Math.abs(primaryCanvas.height - outputSize.source.height) <= 4;
@@ -371,13 +375,17 @@ export default function StudioPage() {
       modeChangedRef.current = true;
       return;
     }
+    // o eixo do recorte inverte junto com o principal: recomeça centralizado
+    cropRef.current = 0.5;
+    setCrop(0.5);
+    setCropEditing(false);
     setBadgeVisible(true);
     const id = window.setTimeout(
       () => setBadgeVisible(false),
       BADGE_DURATION_MS,
     );
     return () => window.clearTimeout(id);
-  }, [captureMode]);
+  }, [frameMode]);
 
   // cada troca de orientação ou de dispositivo reabre a câmera em automático:
   // este é o ponto único que empurra as escolhas do usuário para a track nova
@@ -466,7 +474,7 @@ export default function StudioPage() {
       canvasH,
       canvasV,
       cameraStream: stream,
-      captureMode,
+      captureMode: frameMode,
       directPrimary,
       fps,
       videoBitsPerSecond: videoBitrate(resolution, pixels, quality),
@@ -476,7 +484,7 @@ export default function StudioPage() {
     fps,
     resolution,
     quality,
-    captureMode,
+    frameMode,
     directPrimary,
     recorder,
   ]);
@@ -656,7 +664,6 @@ export default function StudioPage() {
       <DualCanvasRenderer
         stream={stream}
         resolution={resolution}
-        mode={captureMode}
         cropRef={cropRef}
         settingsRef={settingsRef}
         canvasHRef={canvasHRef}
@@ -849,7 +856,7 @@ export default function StudioPage() {
           </div>
         )}
 
-        <OrientationBadge mode={captureMode} visible={badgeVisible} />
+        <OrientationBadge mode={frameMode} visible={badgeVisible} />
       </main>
 
       {(recorder.error || photoError) && (
@@ -870,7 +877,7 @@ export default function StudioPage() {
         zoom={features.zoom}
         zoomLevel={zoomLevel}
         onCycleZoom={handleCycleZoom}
-        captureMode={captureMode}
+        captureMode={frameMode}
         autoRotate={autoRotate}
         onToggleCaptureMode={handleToggleCaptureMode}
         filterLabel={filterId === "none" ? "Filtro" : preset.label}
