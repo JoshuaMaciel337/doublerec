@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CaptureMode,
+  EMPTY_FEATURES,
   FacingMode,
   Fps,
   Resolution,
-  portraitCapture,
+  Size,
+  captureSize,
   TrackFeatures,
   getTrackFeatures,
 } from "./capabilities";
@@ -16,6 +19,7 @@ export interface CameraStreamOptions {
   resolution: Resolution;
   fps: Fps;
   facing: FacingMode;
+  captureMode: CaptureMode;
 }
 
 export interface DeviceLists {
@@ -23,20 +27,69 @@ export interface DeviceLists {
   microphones: MediaDeviceInfo[];
 }
 
+// os controles de imagem da câmera ainda não estão no lib.dom padrão
+type AdvancedConstraint = MediaTrackConstraintSet & {
+  zoom?: number;
+  torch?: boolean;
+  exposureMode?: string;
+  exposureCompensation?: number;
+  iso?: number;
+};
+
+type ExtendedCapabilities = MediaTrackCapabilities & {
+  width?: { max?: number };
+  height?: { max?: number };
+};
+
+/** Descobre o teto da câmera sem manter o stream aberto */
+async function probeMaxSize(
+  videoDeviceId: string | null,
+  facing: FacingMode,
+): Promise<Size | null> {
+  try {
+    const probe: MediaTrackConstraints = {
+      width: { ideal: 8192 },
+      height: { ideal: 8192 },
+    };
+    if (videoDeviceId) probe.deviceId = { exact: videoDeviceId };
+    else probe.facingMode = { ideal: facing };
+
+    const media = await navigator.mediaDevices.getUserMedia({
+      video: probe,
+      audio: false,
+    });
+    const track = media.getVideoTracks()[0];
+    const caps = track?.getCapabilities?.() as ExtendedCapabilities | undefined;
+    const fromCaps =
+      typeof caps?.width?.max === "number" &&
+      typeof caps?.height?.max === "number"
+        ? { width: caps.width.max, height: caps.height.max }
+        : null;
+    const settings = track?.getSettings();
+    const fromSettings =
+      typeof settings?.width === "number" && typeof settings?.height === "number"
+        ? { width: settings.width, height: settings.height }
+        : null;
+    media.getTracks().forEach((t) => t.stop());
+    return fromCaps ?? fromSettings;
+  } catch {
+    return null;
+  }
+}
+
 export function useCameraStream(options: CameraStreamOptions) {
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [features, setFeatures] = useState<TrackFeatures>({
-    zoom: null,
-    torch: false,
-  });
+  const [features, setFeatures] = useState<TrackFeatures>(EMPTY_FEATURES);
   const [devices, setDevices] = useState<DeviceLists>({
     cameras: [],
     microphones: [],
   });
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const maxSizeCacheRef = useRef<Size | null>(null);
 
-  const { videoDeviceId, audioDeviceId, resolution, fps, facing } = options;
+  const { videoDeviceId, audioDeviceId, resolution, fps, facing, captureMode } =
+    options;
 
   useEffect(() => {
     let cancelled = false;
@@ -47,11 +100,19 @@ export function useCameraStream(options: CameraStreamOptions) {
       streamRef.current = null;
       setStream(null);
 
-      const portrait = portraitCapture(resolution);
+      // em Nativa, primeiro perguntamos o teto do aparelho
+      let maxSize = maxSizeCacheRef.current;
+      if (resolution === "native" && !maxSize) {
+        maxSize = await probeMaxSize(videoDeviceId, facing);
+        if (cancelled) return;
+        maxSizeCacheRef.current = maxSize;
+      }
+
+      const size = captureSize(resolution, captureMode, maxSize);
       const video: MediaTrackConstraints = {
-        width: { ideal: portrait.width },
-        height: { ideal: portrait.height },
-        aspectRatio: { ideal: portrait.width / portrait.height },
+        width: { ideal: size.width },
+        height: { ideal: size.height },
+        aspectRatio: { ideal: size.width / size.height },
         frameRate: { ideal: fps },
       };
       if (videoDeviceId) video.deviceId = { exact: videoDeviceId };
@@ -73,8 +134,14 @@ export function useCameraStream(options: CameraStreamOptions) {
           return;
         }
         streamRef.current = media;
+        const track = media.getVideoTracks()[0] ?? null;
+        const nextFeatures = getTrackFeatures(track);
+        // se a track agora declara um teto maior, guardamos para a próxima abertura
+        if (nextFeatures.maxSize) {
+          maxSizeCacheRef.current = nextFeatures.maxSize;
+        }
         setStream(media);
-        setFeatures(getTrackFeatures(media.getVideoTracks()[0] ?? null));
+        setFeatures(nextFeatures);
 
         // labels só ficam disponíveis depois da permissão concedida
         const all = await navigator.mediaDevices.enumerateDevices();
@@ -104,31 +171,57 @@ export function useCameraStream(options: CameraStreamOptions) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [videoDeviceId, audioDeviceId, resolution, fps, facing]);
+  }, [videoDeviceId, audioDeviceId, resolution, fps, facing, captureMode]);
 
-  const applyZoom = useCallback(async (zoom: number) => {
+  // ao trocar de câmera o teto pode mudar
+  useEffect(() => {
+    maxSizeCacheRef.current = null;
+  }, [videoDeviceId, facing]);
+
+  const applyAdvanced = useCallback(async (constraint: AdvancedConstraint) => {
     const track = streamRef.current?.getVideoTracks()[0];
     if (!track) return;
     try {
-      await track.applyConstraints({
-        advanced: [{ zoom } as MediaTrackConstraintSet],
-      });
+      await track.applyConstraints({ advanced: [constraint] });
     } catch {
-      // zoom indisponível neste dispositivo — segue em modo automático
+      // recurso indisponível neste dispositivo — a câmera segue em automático
     }
   }, []);
 
-  const setTorch = useCallback(async (on: boolean) => {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (!track) return;
-    try {
-      await track.applyConstraints({
-        advanced: [{ torch: on } as MediaTrackConstraintSet],
-      });
-    } catch {
-      // flash indisponível neste dispositivo
-    }
-  }, []);
+  const applyZoom = useCallback(
+    (zoom: number) => applyAdvanced({ zoom }),
+    [applyAdvanced],
+  );
 
-  return { stream, features, devices, error, applyZoom, setTorch };
+  const setTorch = useCallback(
+    (on: boolean) => applyAdvanced({ torch: on }),
+    [applyAdvanced],
+  );
+
+  /** compensação de exposição: ajuste fino por cima do automático da câmera */
+  const applyExposure = useCallback(
+    (value: number) =>
+      applyAdvanced({
+        exposureMode: "continuous",
+        exposureCompensation: value,
+      }),
+    [applyAdvanced],
+  );
+
+  /** ISO exige assumir a exposição manualmente */
+  const applyIso = useCallback(
+    (value: number) => applyAdvanced({ exposureMode: "manual", iso: value }),
+    [applyAdvanced],
+  );
+
+  return {
+    stream,
+    features,
+    devices,
+    error,
+    applyZoom,
+    setTorch,
+    applyExposure,
+    applyIso,
+  };
 }

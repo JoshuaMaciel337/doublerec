@@ -1,9 +1,16 @@
 "use client";
 
 import {
+  CaptureMode,
   Fps,
   GridMode,
+  QUALITY_LABELS,
+  QUALITY_OPTIONS,
+  QualityPreset,
+  RESOLUTION_LABELS,
+  RESOLUTION_OPTIONS,
   Resolution,
+  Size,
   StartTimer,
 } from "@/lib/media/capabilities";
 import { DeviceLists } from "@/lib/media/useCameraStream";
@@ -18,17 +25,27 @@ interface SettingsSheetProps {
   onAudioDeviceChange: (id: string | null) => void;
   resolution: Resolution;
   onResolutionChange: (r: Resolution) => void;
+  /** teto reportado pela câmera atual, se a API expuser */
+  cameraMaxSize: Size | null;
+  quality: QualityPreset;
+  onQualityChange: (q: QualityPreset) => void;
   fps: Fps;
   onFpsChange: (f: Fps) => void;
   startTimer: StartTimer;
   onStartTimerChange: (t: StartTimer) => void;
   grid: GridMode;
   onGridChange: (g: GridMode) => void;
+  captureMode: CaptureMode;
+  onCaptureModeChange: (m: CaptureMode) => void;
+  autoRotate: boolean;
+  onAutoRotateChange: (value: boolean) => void;
+  autoSave: boolean;
+  onAutoSaveChange: (value: boolean) => void;
   fileName: string;
   onFileNameChange: (name: string) => void;
 }
 
-function Segmented<T extends string | number>({
+function Segmented<T extends string | number | boolean>({
   options,
   value,
   onChange,
@@ -40,13 +57,13 @@ function Segmented<T extends string | number>({
   format?: (v: T) => string;
 }) {
   return (
-    <div className="flex rounded-lg bg-white/8 p-1">
+    <div className="flex flex-wrap rounded-lg bg-white/8 p-1">
       {options.map((opt) => (
         <button
           key={String(opt)}
           type="button"
           onClick={() => onChange(opt)}
-          className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+          className={`min-w-[4.5rem] flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
             opt === value
               ? "bg-white text-black"
               : "text-zinc-300 hover:bg-white/10"
@@ -83,12 +100,21 @@ export default function SettingsSheet({
   onAudioDeviceChange,
   resolution,
   onResolutionChange,
+  cameraMaxSize,
+  quality,
+  onQualityChange,
   fps,
   onFpsChange,
   startTimer,
   onStartTimerChange,
   grid,
   onGridChange,
+  captureMode,
+  onCaptureModeChange,
+  autoRotate,
+  onAutoRotateChange,
+  autoSave,
+  onAutoSaveChange,
   fileName,
   onFileNameChange,
 }: SettingsSheetProps) {
@@ -146,12 +172,71 @@ export default function SettingsSheet({
             </select>
           </Field>
 
+          <Field label="Gravação principal">
+            <Segmented
+              options={["portrait", "landscape"] as const}
+              value={captureMode}
+              onChange={onCaptureModeChange}
+              format={(v) => (v === "portrait" ? "Em pé 9:16" : "Deitado 16:9")}
+            />
+          </Field>
+
+          <Field label="Girar com o celular">
+            <Segmented
+              options={[true, false] as const}
+              value={autoRotate}
+              onChange={onAutoRotateChange}
+              format={(v) => (v ? "Automático" : "Manual")}
+            />
+          </Field>
+
+          <Field label="Ao parar / tirar foto">
+            <Segmented
+              options={[true, false] as const}
+              value={autoSave}
+              onChange={onAutoSaveChange}
+              format={(v) => (v ? "Salvar na hora" : "Só prévia")}
+            />
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              Com “Salvar na hora”, as duas versões vão para Downloads assim que
+              você para — sem precisar baixar manualmente entre os takes. No
+              celular, o aviso também oferece “Salvar na Galeria…” quando o
+              navegador permitir. Isso libera memória do navegador e evita
+              perder takes.
+            </p>
+          </Field>
+
           <Field label="Resolução">
             <Segmented
-              options={["720p", "1080p"] as const}
+              options={RESOLUTION_OPTIONS}
               value={resolution}
               onChange={onResolutionChange}
+              format={(v) => RESOLUTION_LABELS[v]}
             />
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              {resolution === "native"
+                ? cameraMaxSize
+                  ? `Usa o máximo da câmera (${cameraMaxSize.width}×${cameraMaxSize.height}). O recorte derivado sai na resolução real do sensor, sem esticar.`
+                  : "Usa o máximo que o navegador conseguir pedir à câmera. O recorte derivado sai na resolução real do sensor, sem esticar."
+                : resolution === "4k" || resolution === "2k"
+                  ? "2K/4K melhoram muito o recorte derivado. Em celulares mais fracos pode esquentar ou cair o FPS — se travar, volte para 1080p."
+                  : "O recorte do segundo formato herda os pixels da câmera; em 720p/1080p ele fica menor que o arquivo principal."}
+            </p>
+          </Field>
+
+          <Field label="Qualidade do vídeo">
+            <Segmented
+              options={QUALITY_OPTIONS}
+              value={quality}
+              onChange={onQualityChange}
+              format={(v) => QUALITY_LABELS[v]}
+            />
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              Alta/Ultra aumentam o bitrate (mais nítido, arquivos maiores). Sem
+              filtro ativo, o formato principal grava direto da câmera — bem
+              mais próximo do app nativo. Com filtro, os dois passam pelo
+              canvas.
+            </p>
           </Field>
 
           <Field label="FPS">
@@ -199,9 +284,12 @@ export default function SettingsSheet({
           </Field>
 
           <p className="text-xs leading-relaxed text-zinc-500">
-            Controles manuais (ISO, shutter, white balance) aparecem apenas
-            quando o navegador e a câmera oferecem suporte. Sem suporte, o app
-            opera em modo automático.
+            No modo automático a gravação principal acompanha a rotação do
+            celular — a câmera reabre na orientação nova, por isso pisca por um
+            instante. Durante a gravação a troca fica travada. Controles de
+            exposição e ISO aparecem em Ajustes apenas quando o navegador e a
+            câmera oferecem suporte. Em eventos longos, 1080p + “Salvar na
+            hora” costuma ser o melhor equilíbrio entre qualidade e fluidez.
           </p>
         </div>
       </div>

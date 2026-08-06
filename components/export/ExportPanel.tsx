@@ -1,17 +1,18 @@
 "use client";
 
-import { RecordingResult } from "@/lib/media/useDualRecorder";
+import { CaptureKind } from "@/lib/media/capabilities";
+import { sanitizeFileName } from "@/lib/media/download";
 
 interface ExportPanelProps {
-  result: RecordingResult;
+  kind: CaptureKind;
+  horizontalUrl: string;
+  verticalUrl: string;
+  extension: string;
+  /** só existe em vídeo */
+  durationMs?: number;
   fileName: string;
   onFileNameChange: (name: string) => void;
   onClose: () => void;
-}
-
-function sanitizeFileName(name: string): string {
-  const clean = name.trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "_");
-  return clean || "video";
 }
 
 function formatDuration(ms: number): string {
@@ -55,13 +56,17 @@ function DownloadButton({
 }
 
 export default function ExportPanel({
-  result,
+  kind,
+  horizontalUrl,
+  verticalUrl,
+  extension,
+  durationMs,
   fileName,
   onFileNameChange,
   onClose,
 }: ExportPanelProps) {
   const base = sanitizeFileName(fileName);
-  const ext = result.extension;
+  const isPhoto = kind === "photo";
 
   return (
     <div
@@ -74,9 +79,15 @@ export default function ExportPanel({
       >
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold">Seus vídeos estão prontos</h2>
+            <h2 className="text-base font-semibold">
+              {isPhoto
+                ? "Suas fotos estão prontas"
+                : "Seus vídeos estão prontos"}
+            </h2>
             <p className="text-xs text-zinc-400">
-              Gravação de {formatDuration(result.durationMs)} · formato .{ext}
+              {isPhoto
+                ? `Dois enquadramentos · formato .${extension}`
+                : `Gravação de ${formatDuration(durationMs ?? 0)} · formato .${extension}`}
             </p>
           </div>
           <button
@@ -94,15 +105,24 @@ export default function ExportPanel({
             <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
               Horizontal 16:9 · YouTube
             </span>
-            <video
-              src={result.horizontalUrl}
-              controls
-              playsInline
-              className="aspect-video w-full rounded-xl bg-black ring-1 ring-white/10"
-            />
+            {isPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={horizontalUrl}
+                alt="Prévia horizontal 16:9"
+                className="aspect-video w-full rounded-xl bg-black object-cover ring-1 ring-white/10"
+              />
+            ) : (
+              <video
+                src={horizontalUrl}
+                controls
+                playsInline
+                className="aspect-video w-full rounded-xl bg-black ring-1 ring-white/10"
+              />
+            )}
             <DownloadButton
-              href={result.horizontalUrl}
-              download={`${base}_youtube.${ext}`}
+              href={horizontalUrl}
+              download={`${base}_youtube.${extension}`}
               label="Baixar 16:9"
             />
           </div>
@@ -111,15 +131,24 @@ export default function ExportPanel({
             <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
               Vertical 9:16 · Reels/Shorts
             </span>
-            <video
-              src={result.verticalUrl}
-              controls
-              playsInline
-              className="mx-auto aspect-[9/16] w-full max-w-[220px] rounded-xl bg-black ring-1 ring-white/10"
-            />
+            {isPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={verticalUrl}
+                alt="Prévia vertical 9:16"
+                className="mx-auto aspect-[9/16] w-full max-w-[220px] rounded-xl bg-black object-cover ring-1 ring-white/10"
+              />
+            ) : (
+              <video
+                src={verticalUrl}
+                controls
+                playsInline
+                className="mx-auto aspect-[9/16] w-full max-w-[220px] rounded-xl bg-black ring-1 ring-white/10"
+              />
+            )}
             <DownloadButton
-              href={result.verticalUrl}
-              download={`${base}_reels.${ext}`}
+              href={verticalUrl}
+              download={`${base}_reels.${extension}`}
               label="Baixar 9:16"
             />
           </div>
@@ -141,9 +170,12 @@ export default function ExportPanel({
             className="w-full rounded-lg bg-white/8 px-3 py-2 text-sm text-zinc-100 outline-none ring-1 ring-white/10 placeholder:text-zinc-500 focus:ring-white/40"
           />
           <p className="text-xs text-zinc-500">
-            Serão baixados como {base}_youtube.{ext} e {base}_reels.{ext}. Em
-            navegadores Chromium o formato nativo é .webm; conversão garantida
-            para .mp4 chega em fase futura.
+            Serão baixados como {base}_youtube.{extension} e {base}_reels.
+            {extension}.
+            {!isPhoto &&
+              (extension === "mp4"
+                ? " Formato MP4/H.264 — o mais compatível com Instagram, WhatsApp e editores."
+                : " Este navegador gravou em WebM; conversão garantida para MP4 chega em fase futura.")}
           </p>
         </div>
 
@@ -152,7 +184,7 @@ export default function ExportPanel({
           onClick={onClose}
           className="mt-5 w-full rounded-xl bg-white/10 px-4 py-2.5 text-sm font-medium text-zinc-100 transition-colors hover:bg-white/20"
         >
-          Gravar novamente
+          {isPhoto ? "Voltar à câmera" : "Gravar novamente"}
         </button>
       </div>
     </div>
