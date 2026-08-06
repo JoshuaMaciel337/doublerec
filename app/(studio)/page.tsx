@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import CameraPreview from "@/components/camera/CameraPreview";
 import CropOverlay from "@/components/camera/CropOverlay";
 import DualCanvasRenderer, {
@@ -222,6 +222,9 @@ export default function StudioPage() {
   // cheia, então a tela inteira precisa seguir a realidade
   const frameMode: CaptureMode = outputSize?.mode ?? deviceOrientation;
   const portraitPrimary = frameMode === "portrait";
+  // o palco gira por CSS, então as media queries continuam vendo a tela em pé:
+  // o arranjo deitado precisa vir de uma flag nossa
+  const stageLandscape = rotation !== 0;
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
   const isoValue = isoOverride ?? features.iso?.current ?? 0;
@@ -642,6 +645,23 @@ export default function StudioPage() {
     window.location.assign("/login");
   }, []);
 
+  // com a tela travada em pé, a interface é quem precisa girar para ficar de
+  // frente para o usuário — o giro do canvas cuida só do arquivo
+  const stageStyle: CSSProperties =
+    rotation === 0
+      ? { width: "100%", height: "100%" }
+      : {
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100dvh",
+          height: "100dvw",
+          transform:
+            rotation === 90
+              ? "rotate(-90deg) translateX(-100dvh)"
+              : "rotate(90deg) translateY(-100dvw)",
+        };
+
   const cropTools = (primary: boolean) => {
     if (!primary || recording || countdown !== null) return null;
     if (cropEditing) {
@@ -651,6 +671,7 @@ export default function StudioPage() {
           value={crop}
           label={derivedLabel}
           fraction={outputSize?.fraction}
+          stageRotation={rotation}
           onChange={handleCropChange}
           onConfirm={() => setCropEditing(false)}
         />
@@ -681,7 +702,9 @@ export default function StudioPage() {
   };
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden bg-black text-zinc-100">
+    <div className="fixed inset-0 overflow-hidden bg-black">
+      <div className="origin-top-left" style={stageStyle}>
+        <div className="relative flex h-full w-full flex-col overflow-hidden bg-black text-zinc-100">
       <DualCanvasRenderer
         stream={stream}
         resolution={resolution}
@@ -694,7 +717,11 @@ export default function StudioPage() {
       />
 
       {/* barra superior */}
-      <header className="flex items-center justify-between px-4 pt-3">
+      <header
+        className={`flex items-center justify-between px-4 ${
+          stageLandscape ? "pt-1" : "pt-3"
+        }`}
+      >
         <div className="flex items-center gap-1">
           <GhostButton
             label="Reiniciar sessão"
@@ -795,8 +822,14 @@ export default function StudioPage() {
       </header>
 
       {/* linha de status: resolução, tempo restante estimado e VU meter */}
-      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400">
-        <span>
+      <div
+        className={`flex items-center justify-center gap-x-3 px-4 text-[11px] text-zinc-400 ${
+          stageLandscape
+            ? "flex-nowrap overflow-hidden whitespace-nowrap pt-0.5"
+            : "flex-wrap gap-y-0.5 pt-1.5"
+        }`}
+      >
+        <span className={stageLandscape ? "truncate" : undefined}>
           {RESOLUTION_LABELS[resolution]} · {QUALITY_LABELS[quality]}
           {sourceLabel
             ? ` · cam ${sourceLabel.width}×${sourceLabel.height}`
@@ -810,7 +843,13 @@ export default function StudioPage() {
       </div>
 
       {/* previews */}
-      <main className="relative flex min-h-0 flex-1 flex-col items-center gap-3 px-4 py-3 md:flex-row md:items-center md:justify-center md:gap-6">
+      <main
+        className={`relative flex min-h-0 flex-1 items-center px-4 py-3 ${
+          stageLandscape
+            ? "flex-row justify-center gap-4"
+            : "flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-6"
+        }`}
+      >
         {error ? (
           <div className="flex max-w-sm flex-col items-center gap-4 text-center">
             <p className="text-sm text-zinc-300">{error}</p>
@@ -830,38 +869,52 @@ export default function StudioPage() {
         ) : (
           <>
             <div
-              className={`flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
-                portraitPrimary ? "order-1 w-full flex-1" : "order-2 shrink-0"
-              }`}
+              className={
+                stageLandscape
+                  ? "order-2 flex h-full shrink-0 items-center justify-center"
+                  : `flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
+                      portraitPrimary
+                        ? "order-1 w-full flex-1"
+                        : "order-2 shrink-0"
+                    }`
+              }
             >
               <CameraPreview
                 canvasRef={canvasVRef}
                 aspect="vertical"
                 grid={grid}
                 className={
-                  portraitPrimary
-                    ? "h-full"
-                    : "h-[18vh] max-h-full w-auto md:h-full"
+                  stageLandscape
+                    ? "h-1/2 max-h-full w-auto"
+                    : portraitPrimary
+                      ? "h-full"
+                      : "h-[18vh] max-h-full w-auto md:h-full"
                 }
               >
                 {cropTools(portraitPrimary)}
               </CameraPreview>
             </div>
             <div
-              className={`flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
-                portraitPrimary
-                  ? "order-2 w-full"
-                  : "order-1 min-h-0 w-full flex-1"
-              }`}
+              className={
+                stageLandscape
+                  ? "order-1 flex h-full min-h-0 flex-1 items-center justify-center"
+                  : `flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
+                      portraitPrimary
+                        ? "order-2 w-full"
+                        : "order-1 min-h-0 w-full flex-1"
+                    }`
+              }
             >
               <CameraPreview
                 canvasRef={canvasHRef}
                 aspect="horizontal"
                 grid={grid}
                 className={
-                  portraitPrimary
-                    ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
-                    : "h-full max-h-full w-auto max-w-full"
+                  stageLandscape
+                    ? "h-full max-h-full w-auto max-w-full"
+                    : portraitPrimary
+                      ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
+                      : "h-full max-h-full w-auto max-w-full"
                 }
               >
                 {cropTools(!portraitPrimary)}
@@ -916,6 +969,7 @@ export default function StudioPage() {
         recording={recording}
         countdownActive={countdown !== null}
         recordDisabled={!stream}
+        compact={stageLandscape}
         onRecordPress={handleMainPress}
         hasResult={media !== null}
         onOpenGallery={() => setExportOpen(true)}
@@ -995,9 +1049,10 @@ export default function StudioPage() {
             </p>
             <p className="mb-4 text-xs leading-relaxed text-zinc-500">
               O formato principal usa a abertura inteira da câmera e o outro é
-              um recorte dele. Para gravar deitado, vire o celular e toque na
-              pill de orientação — se a imagem ficar de cabeça para baixo, toque
-              de novo. Com “Salvar na hora” (ligado por padrão), ao parar
+              um recorte dele. Para gravar deitado, toque na pill de orientação
+              e vire o celular: a tela inteira gira junto, mesmo com a rotação
+              travada. Se a imagem ficar de cabeça para baixo, toque de novo
+              para virar para o outro lado. Com “Salvar na hora” (ligado por padrão), ao parar
               as duas versões já vão para Downloads — em evento você grava take
               atrás de take sem abrir a tela de download. No celular, o aviso
               também oferece a opção de mandar para a Galeria quando o navegador
@@ -1026,6 +1081,8 @@ export default function StudioPage() {
           onClose={() => setExportOpen(false)}
         />
       )}
+        </div>
+      </div>
     </div>
   );
 }

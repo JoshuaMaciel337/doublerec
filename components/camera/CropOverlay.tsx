@@ -1,6 +1,7 @@
 "use client";
 
 import { PointerEvent, useRef } from "react";
+import { Rotation } from "@/lib/media/capabilities";
 
 // proporção do formato derivado dentro do principal: (9/16) / (16/9)
 const DEFAULT_BOX_FRACTION = 81 / 256;
@@ -13,6 +14,8 @@ interface CropOverlayProps {
   label: string;
   /** tamanho real do recorte derivado em relação ao principal */
   fraction?: number;
+  /** giro do palco, para converter o toque em coordenadas do elemento */
+  stageRotation?: Rotation;
   onChange: (value: number) => void;
   onConfirm: () => void;
 }
@@ -26,6 +29,7 @@ export default function CropOverlay({
   value,
   label,
   fraction,
+  stageRotation = 0,
   onChange,
   onConfirm,
 }: CropOverlayProps) {
@@ -40,10 +44,21 @@ export default function CropOverlay({
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const total = axis === "y" ? rect.height : rect.width;
+    // com o palco girado o retângulo vem trocado: o eixo vertical do elemento
+    // corre na horizontal da tela (e num dos sentidos, ao contrário)
+    let total: number;
+    let pointer: number;
+    if (stageRotation === 90) {
+      total = axis === "y" ? rect.width : rect.height;
+      pointer = axis === "y" ? clientX - rect.left : rect.bottom - clientY;
+    } else if (stageRotation === 270) {
+      total = axis === "y" ? rect.width : rect.height;
+      pointer = axis === "y" ? rect.right - clientX : clientY - rect.top;
+    } else {
+      total = axis === "y" ? rect.height : rect.width;
+      pointer = axis === "y" ? clientY - rect.top : clientX - rect.left;
+    }
     const boxSize = total * boxFraction;
-    const pointer =
-      axis === "y" ? clientY - rect.top : clientX - rect.left;
     const range = total - boxSize;
     if (range <= 0) return;
     onChange(Math.min(1, Math.max(0, (pointer - boxSize / 2) / range)));
