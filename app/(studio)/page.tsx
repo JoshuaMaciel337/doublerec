@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import CameraPreview from "@/components/camera/CameraPreview";
 import CropOverlay from "@/components/camera/CropOverlay";
 import DualCanvasRenderer, {
@@ -55,6 +55,25 @@ const BADGE_DURATION_MS = 1700;
 const FLASH_DURATION_MS = 180;
 const TOAST_DURATION_MS = 6500;
 const AUTO_SAVE_KEY = "doublerec.autoSave";
+const TILT_SIDE_KEY = "doublerec.tiltSide";
+
+/** para que lado o celular é virado ao gravar deitado */
+export type TiltSide = "left" | "right";
+
+// virando para a esquerda o topo do aparelho aponta para a esquerda, então a
+// cena chega girada para o outro lado — o quadro precisa voltar 90° ao contrário
+const TILT_ROTATION: Record<TiltSide, Rotation> = { left: 270, right: 90 };
+
+function readTiltSide(): TiltSide {
+  if (typeof window === "undefined") return "left";
+  try {
+    return window.localStorage.getItem(TILT_SIDE_KEY) === "right"
+      ? "right"
+      : "left";
+  } catch {
+    return "left";
+  }
+}
 
 function readAutoSavePreference(): boolean {
   if (typeof window === "undefined") return true;
@@ -133,6 +152,7 @@ export default function StudioPage() {
   const [grid, setGrid] = useState<GridMode>("3x3");
   const [fileName, setFileName] = useState("video");
   const [autoSave, setAutoSave] = useState(readAutoSavePreference);
+  const [tiltSide, setTiltSide] = useState<TiltSide>(readTiltSide);
   const [captureKind, setCaptureKind] = useState<CaptureKind>("video");
   const [deviceOrientation, setDeviceOrientation] =
     useState<CaptureMode>(readDeviceOrientation);
@@ -222,9 +242,9 @@ export default function StudioPage() {
   // cheia, então a tela inteira precisa seguir a realidade
   const frameMode: CaptureMode = outputSize?.mode ?? deviceOrientation;
   const portraitPrimary = frameMode === "portrait";
-  // o palco gira por CSS, então as media queries continuam vendo a tela em pé:
-  // o arranjo deitado precisa vir de uma flag nossa
-  const stageLandscape = rotation !== 0;
+  // o preview sempre mostra o quadro na posição em que a câmera entrega, mesmo
+  // quando o buffer está girado para salvar deitado
+  const previewPortrait = rotation !== 0 ? !portraitPrimary : portraitPrimary;
   const derivedLabel = portraitPrimary ? "16:9" : "9:16";
   const exposureValue = exposureOverride ?? features.exposure?.current ?? 0;
   const isoValue = isoOverride ?? features.iso?.current ?? 0;
@@ -628,12 +648,26 @@ export default function StudioPage() {
     setGrid((g) => GRID_CYCLE[(GRID_CYCLE.indexOf(g) + 1) % GRID_CYCLE.length]);
   }, []);
 
-  // com a tela travada o navegador entrega sempre o mesmo quadro: giramos nós.
-  // são dois sentidos porque não dá para saber para que lado o celular virou
+  // com a tela travada o quadro que chega é sempre o mesmo: o botão só troca o
+  // modo de salvamento, girando o quadro na hora de escrever o arquivo
   const handleToggleCaptureMode = useCallback(() => {
     if (recordingRef.current) return;
     setRotation((current) => {
-      const next: Rotation = current === 0 ? 90 : current === 90 ? 270 : 0;
+      const next: Rotation = current === 0 ? TILT_ROTATION[tiltSide] : 0;
+      rotationRef.current = next;
+      return next;
+    });
+  }, [tiltSide]);
+
+  const handleTiltSideChange = useCallback((side: TiltSide) => {
+    setTiltSide(side);
+    try {
+      window.localStorage.setItem(TILT_SIDE_KEY, side);
+    } catch {
+      // storage indisponível (modo privado etc.)
+    }
+    setRotation((current) => {
+      const next: Rotation = current === 0 ? 0 : TILT_ROTATION[side];
       rotationRef.current = next;
       return next;
     });
@@ -645,33 +679,15 @@ export default function StudioPage() {
     window.location.assign("/login");
   }, []);
 
-  // com a tela travada em pé, a interface é quem precisa girar para ficar de
-  // frente para o usuário — o giro do canvas cuida só do arquivo
-  const stageStyle: CSSProperties =
-    rotation === 0
-      ? { width: "100%", height: "100%" }
-      : {
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100dvh",
-          height: "100dvw",
-          transform:
-            rotation === 90
-              ? "rotate(-90deg) translateX(-100dvh)"
-              : "rotate(90deg) translateY(-100dvw)",
-        };
-
   const cropTools = (primary: boolean) => {
     if (!primary || recording || countdown !== null) return null;
     if (cropEditing) {
       return (
         <CropOverlay
-          axis={portraitPrimary ? "y" : "x"}
+          axis={previewPortrait ? "y" : "x"}
           value={crop}
           label={derivedLabel}
           fraction={outputSize?.fraction}
-          stageRotation={rotation}
           onChange={handleCropChange}
           onConfirm={() => setCropEditing(false)}
         />
@@ -702,9 +718,7 @@ export default function StudioPage() {
   };
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-black">
-      <div className="origin-top-left" style={stageStyle}>
-        <div className="relative flex h-full w-full flex-col overflow-hidden bg-black text-zinc-100">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-black text-zinc-100">
       <DualCanvasRenderer
         stream={stream}
         resolution={resolution}
@@ -717,11 +731,7 @@ export default function StudioPage() {
       />
 
       {/* barra superior */}
-      <header
-        className={`flex items-center justify-between px-4 ${
-          stageLandscape ? "pt-1" : "pt-3"
-        }`}
-      >
+      <header className="flex items-center justify-between px-4 pt-3">
         <div className="flex items-center gap-1">
           <GhostButton
             label="Reiniciar sessão"
@@ -822,14 +832,8 @@ export default function StudioPage() {
       </header>
 
       {/* linha de status: resolução, tempo restante estimado e VU meter */}
-      <div
-        className={`flex items-center justify-center gap-x-3 px-4 text-[11px] text-zinc-400 ${
-          stageLandscape
-            ? "flex-nowrap overflow-hidden whitespace-nowrap pt-0.5"
-            : "flex-wrap gap-y-0.5 pt-1.5"
-        }`}
-      >
-        <span className={stageLandscape ? "truncate" : undefined}>
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400">
+        <span>
           {RESOLUTION_LABELS[resolution]} · {QUALITY_LABELS[quality]}
           {sourceLabel
             ? ` · cam ${sourceLabel.width}×${sourceLabel.height}`
@@ -843,13 +847,7 @@ export default function StudioPage() {
       </div>
 
       {/* previews */}
-      <main
-        className={`relative flex min-h-0 flex-1 items-center px-4 py-3 ${
-          stageLandscape
-            ? "flex-row justify-center gap-4"
-            : "flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-6"
-        }`}
-      >
+      <main className="relative flex min-h-0 flex-1 flex-col items-center gap-3 px-4 py-3 md:flex-row md:items-center md:justify-center md:gap-6">
         {error ? (
           <div className="flex max-w-sm flex-col items-center gap-4 text-center">
             <p className="text-sm text-zinc-300">{error}</p>
@@ -869,52 +867,40 @@ export default function StudioPage() {
         ) : (
           <>
             <div
-              className={
-                stageLandscape
-                  ? "order-2 flex h-full shrink-0 items-center justify-center"
-                  : `flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
-                      portraitPrimary
-                        ? "order-1 w-full flex-1"
-                        : "order-2 shrink-0"
-                    }`
-              }
+              className={`flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
+                portraitPrimary ? "order-1 w-full flex-1" : "order-2 shrink-0"
+              }`}
             >
               <CameraPreview
                 canvasRef={canvasVRef}
                 aspect="vertical"
+                canvasRotation={rotation}
                 grid={grid}
                 className={
-                  stageLandscape
-                    ? "h-1/2 max-h-full w-auto"
-                    : portraitPrimary
-                      ? "h-full"
-                      : "h-[18vh] max-h-full w-auto md:h-full"
+                  portraitPrimary
+                    ? "h-full"
+                    : "h-[18vh] max-h-full w-auto md:h-full"
                 }
               >
                 {cropTools(portraitPrimary)}
               </CameraPreview>
             </div>
             <div
-              className={
-                stageLandscape
-                  ? "order-1 flex h-full min-h-0 flex-1 items-center justify-center"
-                  : `flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
-                      portraitPrimary
-                        ? "order-2 w-full"
-                        : "order-1 min-h-0 w-full flex-1"
-                    }`
-              }
+              className={`flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
+                portraitPrimary
+                  ? "order-2 w-full"
+                  : "order-1 min-h-0 w-full flex-1"
+              }`}
             >
               <CameraPreview
                 canvasRef={canvasHRef}
                 aspect="horizontal"
+                canvasRotation={rotation}
                 grid={grid}
                 className={
-                  stageLandscape
-                    ? "h-full max-h-full w-auto max-w-full"
-                    : portraitPrimary
-                      ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
-                      : "h-full max-h-full w-auto max-w-full"
+                  portraitPrimary
+                    ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
+                    : "h-full max-h-full w-auto max-w-full"
                 }
               >
                 {cropTools(!portraitPrimary)}
@@ -953,7 +939,6 @@ export default function StudioPage() {
         zoomLevel={zoomLevel}
         onCycleZoom={handleCycleZoom}
         captureMode={frameMode}
-        rotation={rotation}
         onToggleCaptureMode={handleToggleCaptureMode}
         filterLabel={filterId === "none" ? "Filtro" : preset.label}
         filterActive={filtersOpen || filterId !== "none"}
@@ -969,7 +954,6 @@ export default function StudioPage() {
         recording={recording}
         countdownActive={countdown !== null}
         recordDisabled={!stream}
-        compact={stageLandscape}
         onRecordPress={handleMainPress}
         hasResult={media !== null}
         onOpenGallery={() => setExportOpen(true)}
@@ -997,6 +981,8 @@ export default function StudioPage() {
         onGridChange={setGrid}
         autoSave={autoSave}
         onAutoSaveChange={handleAutoSaveChange}
+        tiltSide={tiltSide}
+        onTiltSideChange={handleTiltSideChange}
         fileName={fileName}
         onFileNameChange={setFileName}
       />
@@ -1050,9 +1036,9 @@ export default function StudioPage() {
             <p className="mb-4 text-xs leading-relaxed text-zinc-500">
               O formato principal usa a abertura inteira da câmera e o outro é
               um recorte dele. Para gravar deitado, toque na pill de orientação
-              e vire o celular: a tela inteira gira junto, mesmo com a rotação
-              travada. Se a imagem ficar de cabeça para baixo, toque de novo
-              para virar para o outro lado. Com “Salvar na hora” (ligado por padrão), ao parar
+              e vire o celular: a imagem no preview é a mesma, o que muda é o
+              tamanho dos dois quadros e o formato em que cada arquivo é salvo.
+              O lado para o qual você vira fica em Configurações. Com “Salvar na hora” (ligado por padrão), ao parar
               as duas versões já vão para Downloads — em evento você grava take
               atrás de take sem abrir a tela de download. No celular, o aviso
               também oferece a opção de mandar para a Galeria quando o navegador
@@ -1081,8 +1067,6 @@ export default function StudioPage() {
           onClose={() => setExportOpen(false)}
         />
       )}
-        </div>
-      </div>
     </div>
   );
 }

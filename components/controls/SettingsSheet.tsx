@@ -36,6 +36,8 @@ interface SettingsSheetProps {
   onGridChange: (g: GridMode) => void;
   autoSave: boolean;
   onAutoSaveChange: (value: boolean) => void;
+  tiltSide: "left" | "right";
+  onTiltSideChange: (side: "left" | "right") => void;
   fileName: string;
   onFileNameChange: (name: string) => void;
 }
@@ -106,6 +108,8 @@ export default function SettingsSheet({
   onGridChange,
   autoSave,
   onAutoSaveChange,
+  tiltSide,
+  onTiltSideChange,
   fileName,
   onFileNameChange,
 }: SettingsSheetProps) {
@@ -176,6 +180,20 @@ export default function SettingsSheet({
               celular, o aviso também oferece “Salvar na Galeria…” quando o
               navegador permitir. Isso libera memória do navegador e evita
               perder takes.
+            </p>
+          </Field>
+
+          <Field label="Para gravar deitado, viro o celular para">
+            <Segmented
+              options={["left", "right"] as const}
+              value={tiltSide}
+              onChange={onTiltSideChange}
+              format={(v) => (v === "left" ? "Esquerda" : "Direita")}
+            />
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              No modo 16:9 o preview continua igual — quem gira é só o arquivo
+              salvo. Se o vídeo deitado sair de cabeça para baixo, troque o lado
+              aqui.
             </p>
           </Field>
 
@@ -257,9 +275,10 @@ export default function SettingsSheet({
           </Field>
 
           <p className="text-xs leading-relaxed text-zinc-500">
-            No modo automático a gravação principal acompanha a rotação do
-            celular — a câmera reabre na orientação nova, por isso pisca por um
-            instante. Durante a gravação a troca fica travada. Controles de
+            Se a rotação da tela não estiver travada, a gravação principal
+            acompanha a posição do celular sozinha e a câmera reabre na
+            orientação nova, por isso pisca por um instante. Durante a gravação
+            a troca fica travada. Controles de
             exposição e ISO aparecem em Ajustes apenas quando o navegador e a
             câmera oferecem suporte. Em eventos longos, 1080p + “Salvar na
             hora” costuma ser o melhor equilíbrio entre qualidade e fluidez.

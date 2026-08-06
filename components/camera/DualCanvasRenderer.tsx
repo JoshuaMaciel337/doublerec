@@ -251,6 +251,9 @@ export default function DualCanvasRenderer({
 
         const settings = settingsRef.current ?? DEFAULT_RENDER_SETTINGS;
         const crop = Math.min(1, Math.max(0, cropRef.current ?? 0.5));
+        // o recorte é escolhido olhando o preview, que mostra o quadro como a
+        // câmera entrega; girando 90° o eixo do quadro girado corre ao contrário
+        const slide = rotation === 90 ? 1 - crop : crop;
         // o formato que acompanha a orientação do quadro é o principal
         const portrait = frameH >= frameW;
 
@@ -260,13 +263,13 @@ export default function DualCanvasRenderer({
           frameW,
           frameH,
           PORTRAIT_ASPECT,
-          portrait ? 0.5 : crop,
+          portrait ? 0.5 : slide,
         );
         const horizontal = coverRect(
           frameW,
           frameH,
           LANDSCAPE_ASPECT,
-          portrait ? crop : 0.5,
+          portrait ? slide : 0.5,
         );
 
         paint(

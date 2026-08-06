@@ -4,7 +4,6 @@ import {
   CaptureKind,
   CaptureMode,
   GridMode,
-  Rotation,
   ZoomCapability,
 } from "@/lib/media/capabilities";
 import RecordButton from "./RecordButton";
@@ -14,7 +13,6 @@ interface CameraSettingsBarProps {
   zoomLevel: number;
   onCycleZoom: () => void;
   captureMode: CaptureMode;
-  rotation: Rotation;
   onToggleCaptureMode: () => void;
   filterLabel: string;
   filterActive: boolean;
@@ -32,7 +30,6 @@ interface CameraSettingsBarProps {
   hasResult: boolean;
   onOpenGallery: () => void;
   onSwitchCamera: () => void;
-  compact?: boolean;
 }
 
 const GRID_LABELS: Record<GridMode, string> = {
@@ -108,7 +105,6 @@ export default function CameraSettingsBar({
   zoomLevel,
   onCycleZoom,
   captureMode,
-  rotation,
   onToggleCaptureMode,
   filterLabel,
   filterActive,
@@ -126,26 +122,13 @@ export default function CameraSettingsBar({
   hasResult,
   onOpenGallery,
   onSwitchCamera,
-  compact = false,
 }: CameraSettingsBarProps) {
   const portrait = captureMode === "portrait";
 
   return (
-    <div
-      className={
-        compact
-          ? "flex flex-row flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
-          : "flex flex-col items-center gap-3 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
-      }
-    >
+    <div className="flex flex-col items-center gap-3 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       {/* pills, como na referência visual */}
-      <div
-        className={
-          compact
-            ? "flex shrink items-center justify-center gap-2"
-            : "flex w-full max-w-lg items-center justify-center gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        }
-      >
+      <div className="flex w-full max-w-lg items-center justify-center gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {zoom && (
           <Pill label={`${zoomLevel}x`} title="Zoom" onClick={onCycleZoom} />
         )}
@@ -153,8 +136,8 @@ export default function CameraSettingsBar({
           label={portrait ? "9:16 principal" : "16:9 principal"}
           title={
             portrait
-              ? "Vire o celular e toque para gravar deitado."
-              : "Toque de novo se a imagem estiver de cabeça para baixo, ou mais uma vez para voltar a gravar em pé."
+              ? "Toque para salvar deitado (16:9 principal) e vire o celular."
+              : "Toque para voltar a salvar em pé (9:16 principal)."
           }
           disabled={recording}
           onClick={onToggleCaptureMode}
@@ -174,13 +157,6 @@ export default function CameraSettingsBar({
                 <rect x="3" y="8" width="18" height="8" rx="1.5" />
               )}
             </svg>
-          }
-          trailing={
-            rotation !== 0 ? (
-              <span className="text-[11px] leading-none opacity-70">
-                {rotation === 90 ? "↻" : "↺"}
-              </span>
-            ) : null
           }
         />
         <Pill
@@ -217,13 +193,7 @@ export default function CameraSettingsBar({
       </div>
 
       {/* fileira principal: galeria, botão de captura, grade, trocar câmera */}
-      <div
-        className={
-          compact
-            ? "flex items-center gap-3"
-            : "flex w-full max-w-sm items-center justify-between px-6"
-        }
-      >
+      <div className="flex w-full max-w-sm items-center justify-between px-6">
         <IconButton
           label={hasResult ? "Abrir última captura" : "Nenhuma captura ainda"}
           onClick={onOpenGallery}
