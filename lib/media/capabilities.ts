@@ -5,6 +5,12 @@ export type FacingMode = "user" | "environment";
 export type StartTimer = 0 | 3 | 5 | 10;
 /** Orientação da gravação principal: a que sai em resolução cheia */
 export type CaptureMode = "portrait" | "landscape";
+/**
+ * Giro aplicado ao quadro da câmera, em graus no sentido horário. Serve para
+ * quem grava com a rotação da tela travada: o navegador entrega o quadro sempre
+ * na mesma orientação, então giramos nós para o conteúdo sair em pé.
+ */
+export type Rotation = 0 | 90 | 270;
 export type CaptureKind = "video" | "photo";
 /** Bitrate relativo — Ultra aproxima mais a câmera nativa, mas pesa mais */
 export type QualityPreset = "low" | "medium" | "high" | "ultra";
@@ -154,6 +160,35 @@ export function coverRect(
     width,
     height,
   };
+}
+
+/**
+ * Converte um recorte do quadro já girado de volta para coordenadas do quadro
+ * original, que é o que o `drawImage` precisa receber.
+ */
+export function unrotateRect(
+  rect: Rect,
+  sourceW: number,
+  sourceH: number,
+  rotation: Rotation,
+): Rect {
+  if (rotation === 90) {
+    return {
+      x: rect.y,
+      y: sourceH - rect.x - rect.width,
+      width: rect.height,
+      height: rect.width,
+    };
+  }
+  if (rotation === 270) {
+    return {
+      x: sourceW - rect.y - rect.height,
+      y: rect.x,
+      width: rect.height,
+      height: rect.width,
+    };
+  }
+  return rect;
 }
 
 function fitToTarget(width: number, height: number, target: Size): Size {

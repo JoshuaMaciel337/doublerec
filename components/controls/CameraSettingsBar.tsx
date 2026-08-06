@@ -4,6 +4,7 @@ import {
   CaptureKind,
   CaptureMode,
   GridMode,
+  Rotation,
   ZoomCapability,
 } from "@/lib/media/capabilities";
 import RecordButton from "./RecordButton";
@@ -13,6 +14,7 @@ interface CameraSettingsBarProps {
   zoomLevel: number;
   onCycleZoom: () => void;
   captureMode: CaptureMode;
+  rotation: Rotation;
   onToggleCaptureMode: () => void;
   filterLabel: string;
   filterActive: boolean;
@@ -105,6 +107,7 @@ export default function CameraSettingsBar({
   zoomLevel,
   onCycleZoom,
   captureMode,
+  rotation,
   onToggleCaptureMode,
   filterLabel,
   filterActive,
@@ -126,7 +129,7 @@ export default function CameraSettingsBar({
   const portrait = captureMode === "portrait";
 
   return (
-    <div className="flex flex-col items-center gap-3 pb-6 pt-2 landscape:gap-1.5 landscape:pb-2 landscape:pt-1">
+    <div className="flex flex-col items-center gap-3 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       {/* pills, como na referência visual */}
       <div className="flex w-full max-w-lg items-center justify-center gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {zoom && (
@@ -136,8 +139,8 @@ export default function CameraSettingsBar({
           label={portrait ? "9:16 principal" : "16:9 principal"}
           title={
             portrait
-              ? "Gravando em pé. Vire o celular para gravar deitado."
-              : "Gravando deitado. Volte o celular para gravar em pé."
+              ? "Vire o celular e toque para gravar deitado."
+              : "Toque de novo se a imagem estiver de cabeça para baixo, ou mais uma vez para voltar a gravar em pé."
           }
           disabled={recording}
           onClick={onToggleCaptureMode}
@@ -159,9 +162,11 @@ export default function CameraSettingsBar({
             </svg>
           }
           trailing={
-            <span className="text-[9px] font-semibold uppercase opacity-60">
-              auto
-            </span>
+            rotation !== 0 ? (
+              <span className="text-[11px] leading-none opacity-70">
+                {rotation === 90 ? "↻" : "↺"}
+              </span>
+            ) : null
           }
         />
         <Pill

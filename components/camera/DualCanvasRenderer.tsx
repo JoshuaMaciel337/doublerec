@@ -7,9 +7,11 @@ import {
   PORTRAIT_ASPECT,
   Rect,
   Resolution,
+  Rotation,
   canvasSizesForSource,
   coverRect,
   derivedFraction,
+  unrotateRect,
 } from "@/lib/media/capabilities";
 import { FilterTint } from "@/lib/media/filters";
 
@@ -31,6 +33,8 @@ interface DualCanvasRendererProps {
   resolution: Resolution;
   /** posição normalizada (0..1) do formato derivado dentro do principal */
   cropRef: RefObject<number>;
+  /** giro manual do quadro, para gravar deitado com a tela travada */
+  rotationRef: RefObject<Rotation>;
   settingsRef: RefObject<RenderSettings>;
   canvasHRef: RefObject<HTMLCanvasElement | null>;
   canvasVRef: RefObject<HTMLCanvasElement | null>;
@@ -61,6 +65,7 @@ export default function DualCanvasRenderer({
   stream,
   resolution,
   cropRef,
+  rotationRef,
   settingsRef,
   canvasHRef,
   canvasVRef,
@@ -133,8 +138,9 @@ export default function DualCanvasRenderer({
       return gradient;
     };
 
-    const ensureCanvasSize = (sourceW: number, sourceH: number) => {
-      const sizes = canvasSizesForSource(resolution, sourceW, sourceH);
+    // dimensões do quadro depois do giro: é nelas que todo o recorte é pensado
+    const ensureCanvasSize = (frameW: number, frameH: number) => {
+      const sizes = canvasSizesForSource(resolution, frameW, frameH);
       const changed =
         canvasH.width !== sizes.horizontal.width ||
         canvasH.height !== sizes.horizontal.height ||
@@ -150,12 +156,12 @@ export default function DualCanvasRenderer({
       if (!sized || changed) {
         sized = true;
         const frameMode: CaptureMode =
-          sourceH >= sourceW ? "portrait" : "landscape";
+          frameH >= frameW ? "portrait" : "landscape";
         onOutputSizeRef.current?.({
           ...sizes,
-          source: { width: sourceW, height: sourceH },
+          source: { width: frameW, height: frameH },
           mode: frameMode,
-          fraction: derivedFraction(frameMode, sourceW, sourceH),
+          fraction: derivedFraction(frameMode, frameW, frameH),
         });
       }
     };
@@ -164,20 +170,43 @@ export default function DualCanvasRenderer({
       ctx: CanvasRenderingContext2D,
       canvas: HTMLCanvasElement,
       rect: Rect,
+      rotation: Rotation,
       settings: RenderSettings,
     ) => {
       ctx.filter = settings.filter;
-      ctx.drawImage(
-        video,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        0,
-        0,
-        canvas.width,
-        canvas.height,
-      );
+      if (rotation === 0) {
+        ctx.drawImage(
+          video,
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        );
+      } else {
+        // giramos o contexto e desenhamos numa caixa com os lados trocados,
+        // que depois do giro preenche o canvas inteiro
+        const boxW = canvas.height;
+        const boxH = canvas.width;
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((rotation * Math.PI) / 180);
+        ctx.drawImage(
+          video,
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
+          -boxW / 2,
+          -boxH / 2,
+          boxW,
+          boxH,
+        );
+        ctx.restore();
+      }
       ctx.filter = "none";
 
       if (settings.tint) {
@@ -214,30 +243,46 @@ export default function DualCanvasRenderer({
       const sourceW = video.videoWidth;
       const sourceH = video.videoHeight;
       if (sourceW > 0 && sourceH > 0) {
-        ensureCanvasSize(sourceW, sourceH);
+        const rotation = rotationRef.current ?? 0;
+        const turned = rotation !== 0;
+        const frameW = turned ? sourceH : sourceW;
+        const frameH = turned ? sourceW : sourceH;
+        ensureCanvasSize(frameW, frameH);
 
         const settings = settingsRef.current ?? DEFAULT_RENDER_SETTINGS;
         const crop = Math.min(1, Math.max(0, cropRef.current ?? 0.5));
-        // o formato que acompanha a orientação do frame é o principal
-        const portrait = sourceH >= sourceW;
+        // o formato que acompanha a orientação do quadro é o principal
+        const portrait = frameH >= frameW;
 
         // o principal fica centralizado e o derivado desliza; só um dos eixos
         // tem folga, no outro o crop não muda nada
         const vertical = coverRect(
-          sourceW,
-          sourceH,
+          frameW,
+          frameH,
           PORTRAIT_ASPECT,
           portrait ? 0.5 : crop,
         );
         const horizontal = coverRect(
-          sourceW,
-          sourceH,
+          frameW,
+          frameH,
           LANDSCAPE_ASPECT,
           portrait ? crop : 0.5,
         );
 
-        paint(ctxV, canvasV, vertical, settings);
-        paint(ctxH, canvasH, horizontal, settings);
+        paint(
+          ctxV,
+          canvasV,
+          unrotateRect(vertical, sourceW, sourceH, rotation),
+          rotation,
+          settings,
+        );
+        paint(
+          ctxH,
+          canvasH,
+          unrotateRect(horizontal, sourceW, sourceH, rotation),
+          rotation,
+          settings,
+        );
       }
       schedule();
     };
@@ -249,7 +294,15 @@ export default function DualCanvasRenderer({
       cancelAnimationFrame(rafId);
       video.srcObject = null;
     };
-  }, [stream, resolution, cropRef, settingsRef, canvasHRef, canvasVRef]);
+  }, [
+    stream,
+    resolution,
+    cropRef,
+    rotationRef,
+    settingsRef,
+    canvasHRef,
+    canvasVRef,
+  ]);
 
   return <video ref={videoRef} muted playsInline className="hidden" />;
 }

@@ -26,6 +26,7 @@ import {
   QualityPreset,
   RESOLUTION_LABELS,
   Resolution,
+  Rotation,
   StartTimer,
   aspectFor,
   videoBitrate,
@@ -65,18 +66,6 @@ function readAutoSavePreference(): boolean {
     return true;
   }
 }
-
-// o formato principal fica com toda a área que sobra; o derivado é uma miniatura
-const PRIMARY_WRAP =
-  "order-1 flex min-h-0 min-w-0 flex-1 items-center justify-center self-stretch";
-const SECONDARY_WRAP =
-  "order-2 flex flex-none items-center justify-center self-stretch";
-/** 9:16 principal: sempre limitado pela altura */
-const PRIMARY_TALL = "h-full";
-/** 16:9 principal: limitado pela largura em tela em pé, pela altura deitado */
-const PRIMARY_WIDE = "w-full landscape:h-full landscape:w-auto";
-const SECONDARY_PREVIEW =
-  "h-[13vh] max-h-[128px] w-auto landscape:h-[68%] landscape:max-h-full";
 
 function readDeviceOrientation(): CaptureMode {
   if (typeof window === "undefined") return "portrait";
@@ -188,6 +177,10 @@ export default function StudioPage() {
   const [crop, setCrop] = useState(0.5);
   const cropRef = useRef(0.5);
 
+  // giro manual do quadro, para gravar deitado com a tela travada
+  const [rotation, setRotation] = useState<Rotation>(0);
+  const rotationRef = useRef<Rotation>(0);
+
   const canvasHRef = useRef<HTMLCanvasElement | null>(null);
   const canvasVRef = useRef<HTMLCanvasElement | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
@@ -197,6 +190,7 @@ export default function StudioPage() {
   const settingsRef = useRef<RenderSettings>(DEFAULT_RENDER_SETTINGS);
   const recordingRef = useRef(false);
   const modeChangedRef = useRef(false);
+  const lastOrientationRef = useRef<CaptureMode | null>(null);
   const autoSaveRef = useRef(true);
   const fileNameRef = useRef(fileName);
 
@@ -245,8 +239,12 @@ export default function StudioPage() {
     ) < 0.03 &&
     Math.abs(primaryCanvas.width - outputSize.source.width) <= 4 &&
     Math.abs(primaryCanvas.height - outputSize.source.height) <= 4;
+  // com giro manual o quadro precisa passar pelo canvas para sair em pé
   const directPrimary =
-    filterId === "none" && isNeutral(adjustments) && sourceIsPrimary;
+    filterId === "none" &&
+    isNeutral(adjustments) &&
+    sourceIsPrimary &&
+    rotation === 0;
 
   const sourceLabel = outputSize?.source ?? features.activeSize ?? null;
   const outputsLabel = (() => {
@@ -406,7 +404,16 @@ export default function StudioPage() {
     const query = window.matchMedia("(orientation: landscape)");
     const sync = () => {
       if (recordingRef.current) return;
-      setDeviceOrientation(query.matches ? "landscape" : "portrait");
+      const next: CaptureMode = query.matches ? "landscape" : "portrait";
+      const previous = lastOrientationRef.current;
+      lastOrientationRef.current = next;
+      // se a tela girou de verdade, o quadro novo já vem na posição certa e o
+      // giro manual deixa de fazer sentido
+      if (previous !== null && previous !== next) {
+        rotationRef.current = 0;
+        setRotation(0);
+      }
+      setDeviceOrientation(next);
     };
     sync();
 
@@ -618,15 +625,16 @@ export default function StudioPage() {
     setGrid((g) => GRID_CYCLE[(GRID_CYCLE.indexOf(g) + 1) % GRID_CYCLE.length]);
   }, []);
 
-  // forçar a outra orientação faria o navegador recortar o quadro: a abertura
-  // cheia só existe na posição em que o aparelho está
+  // com a tela travada o navegador entrega sempre o mesmo quadro: giramos nós.
+  // são dois sentidos porque não dá para saber para que lado o celular virou
   const handleToggleCaptureMode = useCallback(() => {
-    showToast(
-      portraitPrimary
-        ? "Vire o celular na horizontal para gravar em 16:9 com a câmera toda aberta."
-        : "Volte o celular para a vertical para gravar em 9:16 com a câmera toda aberta.",
-    );
-  }, [portraitPrimary, showToast]);
+    if (recordingRef.current) return;
+    setRotation((current) => {
+      const next: Rotation = current === 0 ? 90 : current === 90 ? 270 : 0;
+      rotationRef.current = next;
+      return next;
+    });
+  }, []);
 
   const handleLogout = useCallback(async () => {
     const supabase = createClient();
@@ -678,6 +686,7 @@ export default function StudioPage() {
         stream={stream}
         resolution={resolution}
         cropRef={cropRef}
+        rotationRef={rotationRef}
         settingsRef={settingsRef}
         canvasHRef={canvasHRef}
         canvasVRef={canvasVRef}
@@ -685,7 +694,7 @@ export default function StudioPage() {
       />
 
       {/* barra superior */}
-      <header className="flex items-center justify-between px-4 pt-3 landscape:pt-1">
+      <header className="flex items-center justify-between px-4 pt-3">
         <div className="flex items-center gap-1">
           <GhostButton
             label="Reiniciar sessão"
@@ -786,7 +795,7 @@ export default function StudioPage() {
       </header>
 
       {/* linha de status: resolução, tempo restante estimado e VU meter */}
-      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400 landscape:pt-0.5 landscape:text-[10px]">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 pt-1.5 text-[11px] text-zinc-400">
         <span>
           {RESOLUTION_LABELS[resolution]} · {QUALITY_LABELS[quality]}
           {sourceLabel
@@ -801,7 +810,7 @@ export default function StudioPage() {
       </div>
 
       {/* previews */}
-      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-3 landscape:flex-row landscape:gap-4 landscape:py-1.5">
+      <main className="relative flex min-h-0 flex-1 flex-col items-center gap-3 px-4 py-3 md:flex-row md:items-center md:justify-center md:gap-6">
         {error ? (
           <div className="flex max-w-sm flex-col items-center gap-4 text-center">
             <p className="text-sm text-zinc-300">{error}</p>
@@ -820,22 +829,40 @@ export default function StudioPage() {
           </div>
         ) : (
           <>
-            <div className={portraitPrimary ? PRIMARY_WRAP : SECONDARY_WRAP}>
+            <div
+              className={`flex min-h-0 items-center justify-center md:h-[30vw] md:w-auto md:flex-none lg:h-[26vw] ${
+                portraitPrimary ? "order-1 w-full flex-1" : "order-2 shrink-0"
+              }`}
+            >
               <CameraPreview
                 canvasRef={canvasVRef}
                 aspect="vertical"
                 grid={grid}
-                className={portraitPrimary ? PRIMARY_TALL : SECONDARY_PREVIEW}
+                className={
+                  portraitPrimary
+                    ? "h-full"
+                    : "h-[18vh] max-h-full w-auto md:h-full"
+                }
               >
                 {cropTools(portraitPrimary)}
               </CameraPreview>
             </div>
-            <div className={portraitPrimary ? SECONDARY_WRAP : PRIMARY_WRAP}>
+            <div
+              className={`flex items-center justify-center md:h-[30vw] md:w-auto lg:h-[26vw] ${
+                portraitPrimary
+                  ? "order-2 w-full"
+                  : "order-1 min-h-0 w-full flex-1"
+              }`}
+            >
               <CameraPreview
                 canvasRef={canvasHRef}
                 aspect="horizontal"
                 grid={grid}
-                className={portraitPrimary ? SECONDARY_PREVIEW : PRIMARY_WIDE}
+                className={
+                  portraitPrimary
+                    ? "w-full max-w-[560px] md:h-full md:w-auto md:max-w-none"
+                    : "h-full max-h-full w-auto max-w-full"
+                }
               >
                 {cropTools(!portraitPrimary)}
               </CameraPreview>
@@ -873,6 +900,7 @@ export default function StudioPage() {
         zoomLevel={zoomLevel}
         onCycleZoom={handleCycleZoom}
         captureMode={frameMode}
+        rotation={rotation}
         onToggleCaptureMode={handleToggleCaptureMode}
         filterLabel={filterId === "none" ? "Filtro" : preset.label}
         filterActive={filtersOpen || filterId !== "none"}
@@ -967,9 +995,9 @@ export default function StudioPage() {
             </p>
             <p className="mb-4 text-xs leading-relaxed text-zinc-500">
               O formato principal usa a abertura inteira da câmera e o outro é
-              um recorte dele. Quem manda é a posição do aparelho: em pé, o
-              principal é o 9:16; deitado, o 16:9. Com “Salvar na hora” (ligado
-              por padrão), ao parar
+              um recorte dele. Para gravar deitado, vire o celular e toque na
+              pill de orientação — se a imagem ficar de cabeça para baixo, toque
+              de novo. Com “Salvar na hora” (ligado por padrão), ao parar
               as duas versões já vão para Downloads — em evento você grava take
               atrás de take sem abrir a tela de download. No celular, o aviso
               também oferece a opção de mandar para a Galeria quando o navegador
