@@ -879,7 +879,10 @@ export default function StudioPage() {
                 className={
                   portraitPrimary
                     ? "h-full"
-                    : "h-[18vh] max-h-full w-auto md:h-full"
+                    : rotation !== 0
+                      ? // deitado esta caixa aparece 16:9 e é a secundária
+                        "h-[12vh] max-h-full w-auto"
+                      : "h-[18vh] max-h-full w-auto md:h-full"
                 }
               >
                 {cropTools(portraitPrimary)}
