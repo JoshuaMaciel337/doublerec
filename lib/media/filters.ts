@@ -142,15 +142,59 @@ export function buildFilterString(
   return parts.length > 0 ? parts.join(" ") : "none";
 }
 
+/** resultado do teste de pixel — só preenchido no cliente */
+let nativeFilterCached: boolean | null = null;
+
 /**
- * Chrome, Firefox e Safari modernos implementam CanvasRenderingContext2D.filter.
- * Checamos o protótipo — criar um canvas só para isso falhava em alguns casos
- * (limite de contextos, PWA, etc.) e desabilitava os filtros à toa.
- * Safari antigo (antes de ~15.4) não tem a propriedade e cai no aviso da UI.
+ * true só quando o motor realmente altera pixels com ctx.filter.
+ * No Safari / Chrome do iPhone (WebKit) a propriedade pode existir e mesmo
+ * assim ficar desligada por padrão — nesses casos o fallback em
+ * softwareFilter.ts assume. A UI nunca bloqueia a escolha do filtro.
  */
+export function supportsNativeCanvasFilter(): boolean {
+  if (nativeFilterCached !== null) return nativeFilterCached;
+  // no servidor não cacheamos: senão o false da pré-renderização vaza pro cliente
+  if (typeof document === "undefined") return false;
+  if (
+    typeof CanvasRenderingContext2D === "undefined" ||
+    !("filter" in CanvasRenderingContext2D.prototype)
+  ) {
+    nativeFilterCached = false;
+    return false;
+  }
+  try {
+    const src = document.createElement("canvas");
+    src.width = 1;
+    src.height = 1;
+    const sctx = src.getContext("2d");
+    if (!sctx) {
+      nativeFilterCached = false;
+      return false;
+    }
+    sctx.fillStyle = "#ff0000";
+    sctx.fillRect(0, 0, 1, 1);
+
+    const dst = document.createElement("canvas");
+    dst.width = 1;
+    dst.height = 1;
+    const dctx = dst.getContext("2d");
+    if (!dctx) {
+      nativeFilterCached = false;
+      return false;
+    }
+    dctx.filter = "grayscale(1)";
+    dctx.drawImage(src, 0, 0);
+    const [r, g, b] = dctx.getImageData(0, 0, 1, 1).data;
+    // filtro nativo deixa o vermelho cinza; se continuar vermelho puro, está off
+    nativeFilterCached = Math.abs(r - g) < 30 && Math.abs(g - b) < 30;
+    return nativeFilterCached;
+  } catch {
+    nativeFilterCached = false;
+    return false;
+  }
+}
+
+/** Filtros sempre podem ser escolhidos — nativo ou software */
 export function supportsCanvasFilter(): boolean {
-  return (
-    typeof CanvasRenderingContext2D !== "undefined" &&
-    "filter" in CanvasRenderingContext2D.prototype
-  );
+  return true;
 }

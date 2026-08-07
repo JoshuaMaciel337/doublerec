@@ -1,0 +1,29 @@
+---
+description: Não atualizar npm às cegas após ataque keyv/cacheable (ago/2026); verificar versões antes
+alwaysApply: true
+---
+
+# Dependências npm — cautela pós supply-chain (ago/2026)
+
+Ataque Shai-Hulud / ChainDrop comprometeu o ecossistema **keyv / cacheable** e se espalhou para 400+ pacotes (preinstall `setup.mjs` → Bun → roubo de credenciais).
+
+## Regras para o agente
+
+1. **Não rode** `npm update`, `npm upgrade`, nem bumps amplos de dependências sem o usuário pedir explicitamente.
+2. Se for necessário instalar/atualizar algo:
+   - Prefira `npm ci` quando o lockfile já resolve o caso.
+   - Antes de qualquer `npm install <pkg>@…` ou mudança no `package-lock.json`, **verifique** se o pacote/versão não está na lista comprometida.
+   - Confira no lockfile as versões resolvidas de `keyv`, `flat-cache`, `file-entry-cache` e da família `cacheable` / `@cacheable/*`.
+3. **Versões maliciosas conhecidas (núcleo)** — nunca instalar/atualizar para estas:
+   - `keyv@6.0.0`
+   - `flat-cache@6.1.24`
+   - `file-entry-cache@11.1.6`
+   - `cacheable-request@13.0.20`
+   - `cacheable@2.5.1`
+   - `@cacheable/memory@2.2.1`, `@cacheable/utils@2.5.1`, `@cacheable/node-cache@3.1.2`, `@cacheable/net@2.1.1`
+   - `cache-manager@7.2.10`
+   - `ecto@5.0.1`
+4. Se suspeitar de infecção, procure IOCs: `setup.mjs`, `Math_Symbol.js`, `math_init.js`, script `preinstall` apontando para eles.
+5. Estado verificado deste repo (lockfile): `keyv@4.5.4`, `flat-cache@4.0.1`, `file-entry-cache@8.0.0` — **OK**; não forçar major nessas libs sem auditoria.
+
+Listas atualizadas: Aikido, Socket, Wiz, JFrog (busca: “keyv cacheable npm supply chain August 2026”).

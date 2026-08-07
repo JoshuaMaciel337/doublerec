@@ -4,7 +4,7 @@ import {
   FILTER_PRESETS,
   FilterId,
   getFilterPreset,
-  supportsCanvasFilter,
+  supportsNativeCanvasFilter,
 } from "@/lib/media/filters";
 
 interface FilterStripProps {
@@ -23,14 +23,17 @@ export default function FilterStrip({
 }: FilterStripProps) {
   // só abre por toque do usuário — nunca na pré-renderização do servidor
   if (!open) return null;
-  const supported = supportsCanvasFilter();
   const active = getFilterPreset(value);
+  const native = supportsNativeCanvasFilter();
 
   return (
     <div className="border-t border-white/10 bg-black/60 px-3 py-2 backdrop-blur-sm">
       <div className="mb-1.5 flex items-center justify-between px-1">
         <span className="text-[11px] text-zinc-400">
-          {supported ? active.hint : "Este navegador não aplica filtros no canvas"}
+          {active.hint}
+          {!native && value !== "none"
+            ? " · processado no app (WebKit)"
+            : ""}
         </span>
         <button
           type="button"
@@ -45,9 +48,8 @@ export default function FilterStrip({
           <button
             key={preset.id}
             type="button"
-            disabled={!supported && preset.id !== "none"}
             onClick={() => onChange(preset.id)}
-            className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-30 ${
+            className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors ${
               preset.id === value
                 ? "bg-white text-black"
                 : "bg-white/10 text-zinc-100 hover:bg-white/20"

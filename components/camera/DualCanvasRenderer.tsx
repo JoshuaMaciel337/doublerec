@@ -13,7 +13,8 @@ import {
   derivedFraction,
   unrotateRect,
 } from "@/lib/media/capabilities";
-import { FilterTint } from "@/lib/media/filters";
+import { FilterTint, supportsNativeCanvasFilter } from "@/lib/media/filters";
+import { applySoftwareFilter } from "@/lib/media/softwareFilter";
 
 export interface RenderSettings {
   /** valor pronto para ctx.filter ("none" quando não há tratamento) */
@@ -114,10 +115,16 @@ export default function DualCanvasRenderer({
     const canvasV = canvasVRef.current;
     if (!video || !canvasH || !canvasV) return;
 
-    // desynchronized tira o canvas do caminho crítico de composição da página
+    // Safari/WebKit no iPhone deixa ctx.filter desligado; nesses casos lemos
+    // os pixels de volta e aplicamos a matriz de cor no software.
+    const nativeFilter = supportsNativeCanvasFilter();
     const ctxOptions: CanvasRenderingContext2DSettings = {
       alpha: false,
-      desynchronized: true,
+      // willReadFrequently ajuda o getImageData do fallback; desynchronized
+      // só vale quando o filtro nativo cuida do efeito sem ler pixels de volta
+      ...(nativeFilter
+        ? { desynchronized: true }
+        : { willReadFrequently: true }),
     };
     const ctxH = canvasH.getContext("2d", ctxOptions);
     const ctxV = canvasV.getContext("2d", ctxOptions);
@@ -221,7 +228,9 @@ export default function DualCanvasRenderer({
       rotation: Rotation,
       settings: RenderSettings,
     ) => {
-      ctx.filter = settings.filter;
+      const useNative =
+        nativeFilter && settings.filter !== "none" && settings.filter !== "";
+      if (useNative) ctx.filter = settings.filter;
       if (rotation === 0) {
         ctx.drawImage(
           video,
@@ -255,7 +264,10 @@ export default function DualCanvasRenderer({
         );
         ctx.restore();
       }
-      ctx.filter = "none";
+      if (useNative) ctx.filter = "none";
+      else if (settings.filter !== "none" && settings.filter !== "") {
+        applySoftwareFilter(ctx, canvas.width, canvas.height, settings.filter);
+      }
 
       if (settings.tint) {
         ctx.globalCompositeOperation = settings.tint.mode;
