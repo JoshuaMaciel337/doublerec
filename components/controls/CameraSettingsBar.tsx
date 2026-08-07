@@ -195,7 +195,7 @@ export default function CameraSettingsBar({
       {/* fileira principal: galeria, botão de captura, grade, trocar câmera */}
       <div className="flex w-full max-w-sm items-center justify-between px-6">
         <IconButton
-          label={hasResult ? "Abrir última captura" : "Nenhuma captura ainda"}
+          label={hasResult ? "Abrir biblioteca" : "Nada gravado ainda"}
           onClick={onOpenGallery}
           disabled={!hasResult}
         >

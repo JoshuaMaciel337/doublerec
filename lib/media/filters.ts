@@ -143,11 +143,14 @@ export function buildFilterString(
 }
 
 /**
- * Nem todo navegador implementa CanvasRenderingContext2D.filter (Safari só a
- * partir do 16.4). Sem ele os presets não têm efeito, então a UI avisa.
+ * Chrome, Firefox e Safari modernos implementam CanvasRenderingContext2D.filter.
+ * Checamos o protótipo — criar um canvas só para isso falhava em alguns casos
+ * (limite de contextos, PWA, etc.) e desabilitava os filtros à toa.
+ * Safari antigo (antes de ~15.4) não tem a propriedade e cai no aviso da UI.
  */
 export function supportsCanvasFilter(): boolean {
-  if (typeof document === "undefined") return false;
-  const ctx = document.createElement("canvas").getContext("2d");
-  return !!ctx && "filter" in ctx;
+  return (
+    typeof CanvasRenderingContext2D !== "undefined" &&
+    "filter" in CanvasRenderingContext2D.prototype
+  );
 }

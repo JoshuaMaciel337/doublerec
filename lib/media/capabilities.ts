@@ -111,6 +111,24 @@ export function videoBitrate(
   return Math.min(Math.max(scaled, 4_000_000), 80_000_000);
 }
 
+const FULL_HD_PIXELS = 1920 * 1080;
+
+/**
+ * Bitrate calculado pelos pixels que a saída realmente tem. É o que impede o
+ * recorte de ser codificado ao preço de um 4K só porque o principal é 4K —
+ * dois encoders no teto ao mesmo tempo é o que trava a gravação no celular.
+ */
+export function bitrateForOutput(
+  pixels: number,
+  quality: QualityPreset = "high",
+  fps = 30,
+): number {
+  const scale = Math.max(0.15, pixels / FULL_HD_PIXELS);
+  const fpsFactor = fps > 30 ? 1.35 : 1;
+  const raw = 12_000_000 * scale * QUALITY_MULTIPLIER[quality] * fpsFactor;
+  return Math.min(Math.max(Math.round(raw), 2_500_000), 80_000_000);
+}
+
 /** @deprecated use videoBitrate — mantido só para imports antigos */
 export const VIDEO_BITRATES: Record<Exclude<Resolution, "native">, number> =
   BASE_BITRATES;
@@ -200,41 +218,102 @@ function fitToTarget(width: number, height: number, target: Size): Size {
   };
 }
 
+/** Lado maior do recorte derivado quando o principal passa de 1080p */
+const DERIVED_LONG_SIDE = 1920;
+/** Lado maior dos canvases fora da gravação: eles só alimentam o preview */
+const PREVIEW_LONG_SIDE = 1280;
+
+function capLongSide(size: Size, longSide: number): Size {
+  const longest = Math.max(size.width, size.height);
+  if (longest <= longSide) return size;
+  const scale = longSide / longest;
+  return {
+    // dimensão ímpar quebra encoder de hardware em alguns aparelhos
+    width: Math.round((size.width * scale) / 2) * 2,
+    height: Math.round((size.height * scale) / 2) * 2,
+  };
+}
+
+export interface CanvasSizeOptions {
+  /** orientação do formato principal — o outro é o recorte derivado */
+  mode: CaptureMode;
+  /**
+   * Parado, os canvases só alimentam previews de poucos centímetros: manter
+   * 4K rodando aí só esquenta o aparelho.
+   */
+  previewOnly?: boolean;
+  /**
+   * Gravando com o principal saindo direto da câmera, o canvas dele não entra
+   * em nenhum arquivo — desenhar em 4K ali é trabalho jogado fora.
+   */
+  primaryPreviewOnly?: boolean;
+}
+
 /**
  * Dimensiona os dois canvases a partir do frame real da câmera. Cada formato
  * usa a maior área possível do sensor para o seu aspecto, então o 9:16 abre
  * toda a largura de um frame retrato e o 16:9 abre toda a largura também —
- * um não é recorte do outro.
+ * um não é recorte do outro. Acima de 1080p o derivado é limitado: nenhuma
+ * rede social aceita vertical maior que isso e é o que mais pesa no encoder.
  */
 export function canvasSizesForSource(
   resolution: Resolution,
   sourceW: number,
   sourceH: number,
+  options?: CanvasSizeOptions,
 ): { horizontal: Size; vertical: Size } {
-  const vertical = coverRect(sourceW, sourceH, PORTRAIT_ASPECT);
-  const horizontal = coverRect(sourceW, sourceH, LANDSCAPE_ASPECT);
+  const verticalRect = coverRect(sourceW, sourceH, PORTRAIT_ASPECT);
+  const horizontalRect = coverRect(sourceW, sourceH, LANDSCAPE_ASPECT);
+
+  let vertical: Size;
+  let horizontal: Size;
 
   if (resolution === "native") {
+    vertical = {
+      width: Math.round(verticalRect.width),
+      height: Math.round(verticalRect.height),
+    };
+    horizontal = {
+      width: Math.round(horizontalRect.width),
+      height: Math.round(horizontalRect.height),
+    };
+  } else {
+    const target = RESOLUTIONS[resolution];
+    vertical = fitToTarget(verticalRect.width, verticalRect.height, {
+      width: target.height,
+      height: target.width,
+    });
+    horizontal = fitToTarget(horizontalRect.width, horizontalRect.height, target);
+  }
+
+  if (options?.previewOnly) {
     return {
-      vertical: {
-        width: Math.round(vertical.width),
-        height: Math.round(vertical.height),
-      },
-      horizontal: {
-        width: Math.round(horizontal.width),
-        height: Math.round(horizontal.height),
-      },
+      vertical: capLongSide(vertical, PREVIEW_LONG_SIDE),
+      horizontal: capLongSide(horizontal, PREVIEW_LONG_SIDE),
     };
   }
 
-  const target = RESOLUTIONS[resolution];
-  return {
-    vertical: fitToTarget(vertical.width, vertical.height, {
-      width: target.height,
-      height: target.width,
-    }),
-    horizontal: fitToTarget(horizontal.width, horizontal.height, target),
-  };
+  const heavy =
+    resolution === "2k" || resolution === "4k" || resolution === "native";
+  const portraitPrimary = options?.mode === "portrait";
+
+  if (heavy && options) {
+    if (portraitPrimary) {
+      horizontal = capLongSide(horizontal, DERIVED_LONG_SIDE);
+    } else {
+      vertical = capLongSide(vertical, DERIVED_LONG_SIDE);
+    }
+  }
+
+  if (options?.primaryPreviewOnly) {
+    if (portraitPrimary) {
+      vertical = capLongSide(vertical, PREVIEW_LONG_SIDE);
+    } else {
+      horizontal = capLongSide(horizontal, PREVIEW_LONG_SIDE);
+    }
+  }
+
+  return { vertical, horizontal };
 }
 
 /** Altura (ou largura) do recorte derivado em relação ao principal, 0..1 */

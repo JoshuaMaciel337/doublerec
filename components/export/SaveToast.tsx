@@ -80,7 +80,7 @@ export default function SaveToast({
             onClick={onOpenPanel}
             className="rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-100 hover:bg-white/20"
           >
-            Ver prévia
+            Abrir biblioteca
           </button>
         </div>
       </div>

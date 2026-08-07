@@ -13,6 +13,10 @@ export type RecorderState = "idle" | "recording";
 export interface RecordingResult {
   horizontalUrl: string;
   verticalUrl: string;
+  /** mesmos dados das URLs, para guardar na biblioteca sem reler */
+  horizontalBlob: Blob;
+  verticalBlob: Blob;
+  mimeType: string;
   extension: "mp4" | "webm";
   durationMs: number;
   /** formato principal veio direto da câmera (sem reencode do canvas) */
@@ -31,7 +35,12 @@ export interface DualRecorderStartOptions {
    */
   directPrimary: boolean;
   fps: number;
+  /** bitrate do formato principal */
   videoBitsPerSecond: number;
+  /** bitrate do recorte — bem menor, já que ele sai em resolução menor */
+  derivedBitsPerSecond?: number;
+  /** fps do recorte; acima de 30 não compensa o custo de encode */
+  derivedFps?: number;
 }
 
 interface ActiveRecording {
@@ -105,11 +114,15 @@ export function useDualRecorder() {
       directPrimary,
       fps,
       videoBitsPerSecond,
+      derivedBitsPerSecond,
+      derivedFps,
     } = options;
 
     const cameraVideo = cameraStream.getVideoTracks()[0] ?? null;
     const cameraAudio = cameraStream.getAudioTracks()[0] ?? null;
     const ownedTracks: MediaStreamTrack[] = [];
+    const cropFps = Math.min(derivedFps ?? fps, fps);
+    const primaryPortrait = captureMode === "portrait";
 
     let streamH: MediaStream;
     let streamV: MediaStream;
@@ -120,38 +133,47 @@ export function useDualRecorder() {
       ownedTracks.push(primaryVideo);
       const primaryStream = new MediaStream([primaryVideo]);
       // derivado continua saindo do canvas (recorte + eventual filtro futuro)
-      if (captureMode === "portrait") {
+      if (primaryPortrait) {
         streamV = primaryStream;
-        streamH = canvasH.captureStream(fps);
+        streamH = canvasH.captureStream(cropFps);
         streamH.getVideoTracks().forEach((t) => ownedTracks.push(t));
       } else {
         streamH = primaryStream;
-        streamV = canvasV.captureStream(fps);
+        streamV = canvasV.captureStream(cropFps);
         streamV.getVideoTracks().forEach((t) => ownedTracks.push(t));
       }
       attachAudio(streamH, cameraAudio, ownedTracks, false);
       attachAudio(streamV, cameraAudio, ownedTracks, true);
     } else {
       // com filtro/ajuste: os dois canvases já têm o tratamento aplicado
-      streamH = canvasH.captureStream(fps);
-      streamV = canvasV.captureStream(fps);
+      streamH = canvasH.captureStream(primaryPortrait ? cropFps : fps);
+      streamV = canvasV.captureStream(primaryPortrait ? fps : cropFps);
       streamH.getVideoTracks().forEach((t) => ownedTracks.push(t));
       streamV.getVideoTracks().forEach((t) => ownedTracks.push(t));
       attachAudio(streamH, cameraAudio, ownedTracks, false);
       attachAudio(streamV, cameraAudio, ownedTracks, true);
     }
 
-    const recorderOptions: MediaRecorderOptions = {
+    // cada saída tem o seu bitrate: cobrar do recorte o preço do 4K é o que
+    // mais afoga o encoder em resolução alta
+    const cropBits = derivedBitsPerSecond ?? videoBitsPerSecond;
+    const optionsFor = (bits: number): MediaRecorderOptions => ({
       mimeType: format.mimeType,
-      videoBitsPerSecond,
+      videoBitsPerSecond: bits,
       audioBitsPerSecond: AUDIO_BITRATE,
-    };
+    });
 
     let recH: MediaRecorder;
     let recV: MediaRecorder;
     try {
-      recH = new MediaRecorder(streamH, recorderOptions);
-      recV = new MediaRecorder(streamV, recorderOptions);
+      recH = new MediaRecorder(
+        streamH,
+        optionsFor(primaryPortrait ? cropBits : videoBitsPerSecond),
+      );
+      recV = new MediaRecorder(
+        streamV,
+        optionsFor(primaryPortrait ? videoBitsPerSecond : cropBits),
+      );
     } catch {
       setError("Não foi possível iniciar a gravação neste navegador.");
       ownedTracks.forEach((t) => t.stop());
@@ -210,6 +232,18 @@ export function useDualRecorder() {
         }),
     );
 
+    // pedir o último pedaço antes de encerrar: sem isso o trecho gravado desde
+    // o timeslice anterior pode ficar de fora do arquivo
+    active.recorders.forEach((rec) => {
+      if (rec.state === "recording") {
+        try {
+          rec.requestData();
+        } catch {
+          // alguns navegadores recusam durante a parada; o stop já libera
+        }
+      }
+    });
+
     // parar os dois no mesmo tick
     active.recorders.forEach((rec) => {
       if (rec.state !== "inactive") rec.stop();
@@ -225,16 +259,31 @@ export function useDualRecorder() {
     const blobH = new Blob(active.chunks[0], { type: active.format.mimeType });
     const blobV = new Blob(active.chunks[1], { type: active.format.mimeType });
 
+    activeRef.current = null;
+
+    // um arquivo vazio significa que o encoder desistiu no meio: melhor dizer
+    // isso do que entregar um take quebrado como se estivesse tudo certo
+    if (blobH.size < 1024 || blobV.size < 1024) {
+      setError(
+        "Uma das versões saiu vazia — o aparelho não deu conta da resolução/FPS escolhidos. Reduza em Configurações e grave de novo.",
+      );
+      setState("idle");
+      setElapsedMs(0);
+      return null;
+    }
+
     const newResult: RecordingResult = {
       horizontalUrl: URL.createObjectURL(blobH),
       verticalUrl: URL.createObjectURL(blobV),
+      horizontalBlob: blobH,
+      verticalBlob: blobV,
+      mimeType: active.format.mimeType,
       extension: active.format.extension,
       durationMs,
       directPrimary: active.directPrimary,
       codecLabel: active.format.label,
     };
 
-    activeRef.current = null;
     resultRef.current = newResult;
     setResult(newResult);
     setState("idle");

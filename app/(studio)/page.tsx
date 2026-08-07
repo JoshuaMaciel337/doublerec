@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import CameraPreview from "@/components/camera/CameraPreview";
 import CropOverlay from "@/components/camera/CropOverlay";
 import DualCanvasRenderer, {
@@ -14,6 +14,7 @@ import CameraSettingsBar from "@/components/controls/CameraSettingsBar";
 import FilterStrip from "@/components/controls/FilterStrip";
 import SettingsSheet from "@/components/controls/SettingsSheet";
 import ExportPanel from "@/components/export/ExportPanel";
+import LibraryPanel from "@/components/export/LibraryPanel";
 import SaveToast from "@/components/export/SaveToast";
 import {
   AUDIO_BITRATE,
@@ -29,10 +30,12 @@ import {
   Rotation,
   StartTimer,
   aspectFor,
+  bitrateForOutput,
   videoBitrate,
 } from "@/lib/media/capabilities";
 import {
   buildTakeBase,
+  canAutoDownload,
   canShareFiles,
   downloadUrls,
   shareCaptureFiles,
@@ -47,7 +50,8 @@ import {
 } from "@/lib/media/filters";
 import { useCameraStream } from "@/lib/media/useCameraStream";
 import { useDualRecorder } from "@/lib/media/useDualRecorder";
-import { usePhotoCapture } from "@/lib/media/usePhotoCapture";
+import { PHOTO_MIME, usePhotoCapture } from "@/lib/media/usePhotoCapture";
+import { useTakeLibrary } from "@/lib/media/useTakeLibrary";
 import { createClient } from "@/lib/supabase/client";
 
 const GRID_CYCLE: GridMode[] = ["3x3", "cross", "safe", "none"];
@@ -56,6 +60,12 @@ const FLASH_DURATION_MS = 180;
 const TOAST_DURATION_MS = 6500;
 const AUTO_SAVE_KEY = "doublerec.autoSave";
 const TILT_SIDE_KEY = "doublerec.tiltSide";
+/** abaixo desta fração do fps pedido, o aparelho não está dando conta */
+const FPS_TROUBLE_RATIO = 0.7;
+/** amostras seguidas ruins antes de aliviar a carga */
+const FPS_TROUBLE_SAMPLES = 3;
+const MAX_DERIVED_SKIP = 3;
+const MAX_PRIMARY_SKIP = 1;
 
 /** para que lado o celular é virado ao gravar deitado */
 export type TiltSide = "left" | "right";
@@ -93,10 +103,36 @@ function readDeviceOrientation(): CaptureMode {
     : "portrait";
 }
 
+/**
+ * Espera o renderer redimensionar os canvases e desenhar neles antes de
+ * alguém ler os pixels — sem isso o arquivo sairia com o tamanho do preview
+ * ou com o primeiro quadro em branco.
+ */
+function waitForFullQuality(
+  counter: RefObject<number>,
+  frames = 2,
+  timeoutMs = 700,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = performance.now() + timeoutMs;
+    const check = () => {
+      if ((counter.current ?? 0) >= frames || performance.now() >= deadline) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
 interface MediaPreview {
   kind: CaptureKind;
   horizontalUrl: string;
   verticalUrl: string;
+  horizontalBlob: Blob;
+  verticalBlob: Blob;
+  mimeType: string;
   extension: string;
   durationMs?: number;
   directPrimary?: boolean;
@@ -170,6 +206,7 @@ export default function StudioPage() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [adjustmentsOpen, setAdjustmentsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [cropEditing, setCropEditing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -185,6 +222,11 @@ export default function StudioPage() {
   const [shareAvailable] = useState(() =>
     typeof window !== "undefined" ? canShareFiles() : false,
   );
+  const [autoDownload] = useState(() =>
+    typeof window !== "undefined" ? canAutoDownload() : false,
+  );
+  const [measuredFps, setMeasuredFps] = useState<number | null>(null);
+  const [degraded, setDegraded] = useState(false);
   const [outputSize, setOutputSize] = useState<{
     horizontal: { width: number; height: number };
     vertical: { width: number; height: number };
@@ -213,6 +255,17 @@ export default function StudioPage() {
   const lastOrientationRef = useRef<CaptureMode | null>(null);
   const autoSaveRef = useRef(true);
   const fileNameRef = useRef(fileName);
+  // canvases em tamanho de arquivo só quando alguém vai consumir os pixels
+  const fullQualityRef = useRef(false);
+  const fullFrameCountRef = useRef(0);
+  const primaryFromCameraRef = useRef(false);
+  const derivedSkipRef = useRef(0);
+  const primarySkipRef = useRef(0);
+  const troubleSamplesRef = useRef(0);
+  const degradedRef = useRef(false);
+  const fpsTargetRef = useRef<number>(fps);
+
+  const library = useTakeLibrary();
 
   const {
     stream,
@@ -322,12 +375,39 @@ export default function StudioPage() {
       setMedia(preview);
       setExportOpen(false);
 
+      const base = buildTakeBase(fileNameRef.current);
+
+      // a biblioteca vem antes de tudo: no iOS o download abre o arquivo por
+      // cima do app e descarrega a página, então guardar primeiro é o que
+      // garante que o take sobrevive mesmo se a tela sumir em seguida
+      const stored = await library.addTake({
+        kind: preview.kind === "photo" ? "photo" : "video",
+        durationMs: preview.durationMs,
+        extension: preview.extension,
+        mimeType: preview.mimeType,
+        baseName: base,
+        horizontal: preview.horizontalBlob,
+        vertical: preview.verticalBlob,
+      });
+
       if (!autoSaveRef.current) {
         setExportOpen(true);
         return;
       }
 
-      const base = buildTakeBase(fileNameRef.current);
+      if (!autoDownload) {
+        showToast(
+          stored
+            ? preview.kind === "photo"
+              ? "Foto guardada na biblioteca — toque para mandar para Fotos"
+              : "Take guardado na biblioteca — toque para mandar para Fotos"
+            : "Não deu para guardar na biblioteca; salve agora pela prévia.",
+          stored ? "ok" : "warn",
+        );
+        if (!stored) setExportOpen(true);
+        return;
+      }
+
       const ext = preview.extension;
       try {
         await downloadUrls([
@@ -340,6 +420,7 @@ export default function StudioPage() {
             filename: `${base}_reels.${ext}`,
           },
         ]);
+        if (stored) void library.setSaved(stored.id, true);
         showToast(
           preview.kind === "photo"
             ? "2 fotos salvas em Downloads"
@@ -349,41 +430,78 @@ export default function StudioPage() {
         );
       } catch {
         showToast(
-          "Não deu para baixar automaticamente — abra a prévia e salve manualmente.",
+          "Não deu para baixar automaticamente — os arquivos estão na biblioteca.",
           "warn",
         );
-        setExportOpen(true);
       }
     },
-    [showToast],
+    [autoDownload, library, showToast],
   );
 
   const handleShareToGallery = useCallback(async () => {
     if (!media) return;
     const base = buildTakeBase(fileNameRef.current);
-    const mime =
-      media.kind === "photo"
-        ? "image/jpeg"
-        : media.extension === "mp4"
-          ? "video/mp4"
-          : "video/webm";
     const result = await shareCaptureFiles({
       horizontalUrl: media.horizontalUrl,
       verticalUrl: media.verticalUrl,
       horizontalName: `${base}_youtube.${media.extension}`,
       verticalName: `${base}_reels.${media.extension}`,
-      mimeType: mime,
+      mimeType: media.mimeType,
       title: "DoubleRec",
     });
     if (result === "shared") {
       showToast("Escolha Galeria/Fotos no compartilhar do celular");
+      void library.refresh();
     } else if (result === "unavailable") {
       showToast(
-        "Este navegador não envia arquivos para a Galeria — use os arquivos em Downloads.",
+        "Este navegador não envia arquivos para a Galeria — abra a biblioteca para salvar.",
         "warn",
       );
     }
-  }, [media, showToast]);
+  }, [library, media, showToast]);
+
+  /**
+   * O fps entregue é a única medida honesta de que o aparelho está dando
+   * conta. Caindo muito, aliviamos a cadência do recorte — nunca o tamanho
+   * dos canvases, porque redimensionar durante a gravação corrompe o arquivo.
+   */
+  const handleFpsSample = useCallback(
+    (value: number) => {
+      setMeasuredFps(value);
+      const target = fpsTargetRef.current;
+      if (!recordingRef.current || target <= 0) {
+        troubleSamplesRef.current = 0;
+        return;
+      }
+      if (value >= target * FPS_TROUBLE_RATIO) {
+        troubleSamplesRef.current = 0;
+        return;
+      }
+      troubleSamplesRef.current += 1;
+      if (troubleSamplesRef.current < FPS_TROUBLE_SAMPLES) return;
+      troubleSamplesRef.current = 0;
+
+      // o recorte é o primeiro a ceder; só quando ele já está no limite é que
+      // aliviamos o principal, porque aí o take inteiro está em risco
+      if (derivedSkipRef.current < MAX_DERIVED_SKIP) {
+        derivedSkipRef.current += 1;
+      } else if (primarySkipRef.current < MAX_PRIMARY_SKIP) {
+        primarySkipRef.current += 1;
+      } else {
+        return;
+      }
+
+      if (!degradedRef.current) {
+        degradedRef.current = true;
+        setDegraded(true);
+        showToast(
+          "Aliviei a gravação para não travar — para manter a qualidade cheia, baixe a resolução ou o FPS em Configurações.",
+          "warn",
+        );
+      }
+    },
+    [showToast],
+  );
 
   // o loop de render lê os ajustes por ref para não reiniciar a cada slider
   useEffect(() => {
@@ -503,28 +621,63 @@ export default function StudioPage() {
     };
   }, [resolution, outputSize, quality]);
 
-  const beginRecording = useCallback(() => {
+  const beginRecording = useCallback(async () => {
     const canvasH = canvasHRef.current;
     const canvasV = canvasVRef.current;
     if (!canvasH || !canvasV || !stream) return;
     // o recorder revoga as URLs da gravação anterior ao iniciar outra
     setMedia(null);
-    const pixels = canvasH.width * canvasH.height;
-    recorder.start({
+
+    // os canvases estavam em tamanho de preview: só agora eles precisam ficar
+    // do tamanho do arquivo, e o captureStream tem que vir depois disso
+    fullFrameCountRef.current = 0;
+    fullQualityRef.current = true;
+    primaryFromCameraRef.current = directPrimary;
+    derivedSkipRef.current = 0;
+    primarySkipRef.current = 0;
+    troubleSamplesRef.current = 0;
+    degradedRef.current = false;
+    fpsTargetRef.current = fps;
+    setDegraded(false);
+    await waitForFullQuality(fullFrameCountRef);
+
+    const primary = portraitPrimary ? canvasV : canvasH;
+    const derived = portraitPrimary ? canvasH : canvasV;
+    // com o principal saindo da câmera, o canvas dele está em preview: o
+    // bitrate tem que seguir o tamanho real do arquivo, não o do preview
+    const primaryPixels = directPrimary
+      ? (primaryCanvas?.width ?? primary.width) *
+        (primaryCanvas?.height ?? primary.height)
+      : primary.width * primary.height;
+    const derivedFps = Math.min(30, fps);
+
+    const started = recorder.start({
       canvasH,
       canvasV,
       cameraStream: stream,
       captureMode: frameMode,
       directPrimary,
       fps,
-      videoBitsPerSecond: videoBitrate(resolution, pixels, quality),
+      videoBitsPerSecond: bitrateForOutput(primaryPixels, quality, fps),
+      derivedBitsPerSecond: bitrateForOutput(
+        derived.width * derived.height,
+        quality,
+        derivedFps,
+      ),
+      derivedFps,
     });
+
+    if (!started) {
+      fullQualityRef.current = false;
+      primaryFromCameraRef.current = false;
+    }
   }, [
     stream,
     fps,
-    resolution,
     quality,
     frameMode,
+    portraitPrimary,
+    primaryCanvas,
     directPrimary,
     recorder,
   ]);
@@ -533,7 +686,16 @@ export default function StudioPage() {
     const canvasH = canvasHRef.current;
     const canvasV = canvasVRef.current;
     if (!canvasH || !canvasV) return;
+    // a foto sai dos canvases, então eles precisam estar em tamanho de arquivo
+    const wasFull = fullQualityRef.current;
+    if (!wasFull) {
+      fullFrameCountRef.current = 0;
+      fullQualityRef.current = true;
+      primaryFromCameraRef.current = false;
+      await waitForFullQuality(fullFrameCountRef);
+    }
     const shot = await capturePhoto(canvasH, canvasV);
+    if (!wasFull) fullQualityRef.current = false;
     if (!shot) return;
     setFlashing(true);
     window.setTimeout(() => setFlashing(false), FLASH_DURATION_MS);
@@ -541,13 +703,16 @@ export default function StudioPage() {
       kind: "photo",
       horizontalUrl: shot.horizontalUrl,
       verticalUrl: shot.verticalUrl,
+      horizontalBlob: shot.horizontalBlob,
+      verticalBlob: shot.verticalBlob,
+      mimeType: PHOTO_MIME,
       extension: "jpg",
     });
   }, [capturePhoto, finishCapture]);
 
   const triggerCapture = useCallback(() => {
     if (captureKind === "photo") void takePhoto();
-    else beginRecording();
+    else void beginRecording();
   }, [captureKind, takePhoto, beginRecording]);
 
   useEffect(() => {
@@ -590,11 +755,19 @@ export default function StudioPage() {
     }
     if (recording) {
       const result = await recorder.stop();
+      // parada a gravação, os canvases voltam ao tamanho de preview
+      fullQualityRef.current = false;
+      primaryFromCameraRef.current = false;
+      derivedSkipRef.current = 0;
+      primarySkipRef.current = 0;
       if (result) {
         await finishCapture({
           kind: "video",
           horizontalUrl: result.horizontalUrl,
           verticalUrl: result.verticalUrl,
+          horizontalBlob: result.horizontalBlob,
+          verticalBlob: result.verticalBlob,
+          mimeType: result.mimeType,
           extension: result.extension,
           durationMs: result.durationMs,
           directPrimary: result.directPrimary,
@@ -725,8 +898,14 @@ export default function StudioPage() {
         cropRef={cropRef}
         rotationRef={rotationRef}
         settingsRef={settingsRef}
+        fullQualityRef={fullQualityRef}
+        fullFrameCountRef={fullFrameCountRef}
+        primaryFromCameraRef={primaryFromCameraRef}
+        derivedSkipRef={derivedSkipRef}
+        primarySkipRef={primarySkipRef}
         canvasHRef={canvasHRef}
         canvasVRef={canvasVRef}
+        onFpsSample={handleFpsSample}
         onOutputSize={setOutputSize}
       />
 
@@ -839,10 +1018,22 @@ export default function StudioPage() {
             ? ` · cam ${sourceLabel.width}×${sourceLabel.height}`
             : ""}
           {outputsLabel ? ` · ${outputsLabel}` : ""} · {fps} fps
+          {measuredFps !== null ? ` (real ${Math.round(measuredFps)})` : ""}
           {directPrimary ? " · principal direto" : " · via canvas"}
           {recorder.activeCodec ? ` · ${recorder.activeCodec}` : ""}
         </span>
         {minutesLeft !== null && <span>· ~{minutesLeft} min restantes</span>}
+        {library.takes.length > 0 && (
+          <span>
+            · {library.takes.length}{" "}
+            {library.takes.length === 1 ? "take guardado" : "takes guardados"}
+          </span>
+        )}
+        {degraded && (
+          <span className="text-amber-400">
+            · aliviando o recorte para não travar
+          </span>
+        )}
         <AudioMeter stream={stream} />
       </div>
 
@@ -881,7 +1072,7 @@ export default function StudioPage() {
                     ? "h-full"
                     : rotation !== 0
                       ? // deitado esta caixa aparece 16:9 e é a secundária
-                        "h-[12vh] max-h-full w-auto"
+                        "h-[15vh] max-h-full w-auto"
                       : "h-[18vh] max-h-full w-auto md:h-full"
                 }
               >
@@ -958,8 +1149,8 @@ export default function StudioPage() {
         countdownActive={countdown !== null}
         recordDisabled={!stream}
         onRecordPress={handleMainPress}
-        hasResult={media !== null}
-        onOpenGallery={() => setExportOpen(true)}
+        hasResult={media !== null || library.takes.length > 0}
+        onOpenGallery={() => setLibraryOpen(true)}
         onSwitchCamera={handleSwitchCamera}
       />
 
@@ -1003,6 +1194,20 @@ export default function StudioPage() {
         onIsoChange={setIsoOverride}
       />
 
+      <LibraryPanel
+        open={libraryOpen}
+        takes={library.takes}
+        usage={library.usage}
+        error={library.error}
+        loadTake={library.loadTake}
+        onSetSaved={library.setSaved}
+        onRemove={library.remove}
+        onRemoveMany={library.removeMany}
+        onClear={library.clear}
+        onNotify={showToast}
+        onClose={() => setLibraryOpen(false)}
+      />
+
       <SaveToast
         open={toast !== null}
         kind={media?.kind ?? captureKind}
@@ -1012,7 +1217,7 @@ export default function StudioPage() {
         onShare={() => void handleShareToGallery()}
         onOpenPanel={() => {
           setToast(null);
-          setExportOpen(true);
+          setLibraryOpen(true);
         }}
         onDismiss={() => setToast(null)}
       />
@@ -1041,11 +1246,17 @@ export default function StudioPage() {
               um recorte dele. Para gravar deitado, toque na pill de orientação
               e vire o celular: a imagem no preview é a mesma, o que muda é o
               tamanho dos dois quadros e o formato em que cada arquivo é salvo.
-              O lado para o qual você vira fica em Configurações. Com “Salvar na hora” (ligado por padrão), ao parar
-              as duas versões já vão para Downloads — em evento você grava take
-              atrás de take sem abrir a tela de download. No celular, o aviso
-              também oferece a opção de mandar para a Galeria quando o navegador
-              permitir.
+              O lado para o qual você vira fica em Configurações.
+            </p>
+            <p className="mb-4 text-xs leading-relaxed text-zinc-500">
+              Tudo que você captura entra na biblioteca deste aparelho antes de
+              qualquer outra coisa, com as duas versões, e continua lá mesmo se
+              o app fechar — dá para gravar take atrás de take sem parar para
+              salvar. No fim, abra a biblioteca pelo ícone da galeria e mande o
+              lote inteiro para Fotos de uma vez. Nenhum navegador escreve
+              direto na galeria do iPhone: esse toque é obrigatório, mas é um
+              só. No computador, as duas versões continuam indo sozinhas para
+              Downloads ao parar a gravação.
             </p>
             <button
               type="button"

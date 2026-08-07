@@ -175,11 +175,11 @@ export default function SettingsSheet({
               format={(v) => (v ? "Salvar na hora" : "Só prévia")}
             />
             <p className="text-[11px] leading-relaxed text-zinc-500">
-              Com “Salvar na hora”, as duas versões vão para Downloads assim que
-              você para — sem precisar baixar manualmente entre os takes. No
-              celular, o aviso também oferece “Salvar na Galeria…” quando o
-              navegador permitir. Isso libera memória do navegador e evita
-              perder takes.
+              As duas versões sempre entram na biblioteca do aparelho, dê no que
+              der. Com “Salvar na hora”, no computador elas também vão sozinhas
+              para Downloads; no celular o app avisa e você manda para Fotos
+              quando quiser, porque baixar ali interromperia a gravação
+              seguinte. Com “Só prévia”, nada sai sem você pedir.
             </p>
           </Field>
 

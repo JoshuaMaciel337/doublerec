@@ -36,8 +36,27 @@ interface DualCanvasRendererProps {
   /** giro manual do quadro, para gravar deitado com a tela travada */
   rotationRef: RefObject<Rotation>;
   settingsRef: RefObject<RenderSettings>;
+  /**
+   * Fora da gravação os canvases só alimentam previews pequenos; a resolução
+   * cheia só é montada quando alguém vai consumir os pixels de verdade.
+   */
+  fullQualityRef: RefObject<boolean>;
+  /**
+   * Quantos frames já foram desenhados desde que a qualidade cheia foi
+   * pedida. Quem vai ler os pixels espera esse contador em vez de chutar um
+   * número de rAFs, porque o desenho segue a câmera, não a tela.
+   */
+  fullFrameCountRef: RefObject<number>;
+  /** o principal está sendo gravado direto da câmera, sem passar pelo canvas */
+  primaryFromCameraRef: RefObject<boolean>;
+  /** quantos frames pular no derivado — a válvula do modo degradado */
+  derivedSkipRef: RefObject<number>;
+  /** último recurso: aliviar também o principal quando nada mais resolve */
+  primarySkipRef: RefObject<number>;
   canvasHRef: RefObject<HTMLCanvasElement | null>;
   canvasVRef: RefObject<HTMLCanvasElement | null>;
+  /** fps realmente entregue, para a barra de status e o auto-ajuste */
+  onFpsSample?: (fps: number) => void;
   /** reporta as dimensões reais dos arquivos (para a barra de status) */
   onOutputSize?: (info: {
     horizontal: { width: number; height: number };
@@ -67,16 +86,27 @@ export default function DualCanvasRenderer({
   cropRef,
   rotationRef,
   settingsRef,
+  fullQualityRef,
+  fullFrameCountRef,
+  primaryFromCameraRef,
+  derivedSkipRef,
+  primarySkipRef,
   canvasHRef,
   canvasVRef,
+  onFpsSample,
   onOutputSize,
 }: DualCanvasRendererProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onOutputSizeRef = useRef(onOutputSize);
+  const onFpsSampleRef = useRef(onFpsSample);
 
   useEffect(() => {
     onOutputSizeRef.current = onOutputSize;
   }, [onOutputSize]);
+
+  useEffect(() => {
+    onFpsSampleRef.current = onFpsSample;
+  }, [onFpsSample]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -84,8 +114,13 @@ export default function DualCanvasRenderer({
     const canvasV = canvasVRef.current;
     if (!video || !canvasH || !canvasV) return;
 
-    const ctxH = canvasH.getContext("2d", { alpha: false });
-    const ctxV = canvasV.getContext("2d", { alpha: false });
+    // desynchronized tira o canvas do caminho crítico de composição da página
+    const ctxOptions: CanvasRenderingContext2DSettings = {
+      alpha: false,
+      desynchronized: true,
+    };
+    const ctxH = canvasH.getContext("2d", ctxOptions);
+    const ctxV = canvasV.getContext("2d", ctxOptions);
     if (!ctxH || !ctxV) return;
 
     if (!stream) {
@@ -140,7 +175,15 @@ export default function DualCanvasRenderer({
 
     // dimensões do quadro depois do giro: é nelas que todo o recorte é pensado
     const ensureCanvasSize = (frameW: number, frameH: number) => {
-      const sizes = canvasSizesForSource(resolution, frameW, frameH);
+      const frameMode: CaptureMode =
+        frameH >= frameW ? "portrait" : "landscape";
+      const full = fullQualityRef.current ?? false;
+      const primaryDirect = primaryFromCameraRef.current ?? false;
+      const sizes = canvasSizesForSource(resolution, frameW, frameH, {
+        mode: frameMode,
+        previewOnly: !full,
+        primaryPreviewOnly: full && primaryDirect,
+      });
       const changed =
         canvasH.width !== sizes.horizontal.width ||
         canvasH.height !== sizes.horizontal.height ||
@@ -155,10 +198,15 @@ export default function DualCanvasRenderer({
       }
       if (!sized || changed) {
         sized = true;
-        const frameMode: CaptureMode =
-          frameH >= frameW ? "portrait" : "landscape";
+        // a barra de status mostra o tamanho do arquivo, não o do preview
+        const output =
+          full && !primaryDirect
+            ? sizes
+            : canvasSizesForSource(resolution, frameW, frameH, {
+                mode: frameMode,
+              });
         onOutputSizeRef.current?.({
-          ...sizes,
+          ...output,
           source: { width: frameW, height: frameH },
           mode: frameMode,
           fraction: derivedFraction(frameMode, frameW, frameH),
@@ -238,8 +286,25 @@ export default function DualCanvasRenderer({
       }
     };
 
+    let frameCount = 0;
+    let fpsWindowStart = performance.now();
+    let fpsWindowFrames = 0;
+
+    const sampleFps = () => {
+      fpsWindowFrames += 1;
+      const now = performance.now();
+      const elapsed = now - fpsWindowStart;
+      if (elapsed >= 1000) {
+        onFpsSampleRef.current?.((fpsWindowFrames * 1000) / elapsed);
+        fpsWindowStart = now;
+        fpsWindowFrames = 0;
+      }
+    };
+
     const draw = () => {
       if (stopped) return;
+      sampleFps();
+      frameCount += 1;
       const sourceW = video.videoWidth;
       const sourceH = video.videoHeight;
       if (sourceW > 0 && sourceH > 0) {
@@ -272,20 +337,39 @@ export default function DualCanvasRenderer({
           portrait ? slide : 0.5,
         );
 
-        paint(
-          ctxV,
-          canvasV,
-          unrotateRect(vertical, sourceW, sourceH, rotation),
-          rotation,
-          settings,
-        );
-        paint(
-          ctxH,
-          canvasH,
-          unrotateRect(horizontal, sourceW, sourceH, rotation),
-          rotation,
-          settings,
-        );
+        // sob pressão o derivado passa a ser desenhado de vez em quando: o
+        // track do canvas simplesmente repete o último frame, o que degrada
+        // a fluidez do recorte sem arriscar o arquivo principal
+        const skip = Math.max(0, derivedSkipRef.current ?? 0);
+        const primarySkip = Math.max(0, primarySkipRef.current ?? 0);
+        const drawDerived = skip === 0 || frameCount % (skip + 1) === 0;
+        const drawPrimary =
+          primarySkip === 0 || frameCount % (primarySkip + 1) === 0;
+
+        if (portrait ? drawPrimary : drawDerived) {
+          paint(
+            ctxV,
+            canvasV,
+            unrotateRect(vertical, sourceW, sourceH, rotation),
+            rotation,
+            settings,
+          );
+        }
+        if (portrait ? drawDerived : drawPrimary) {
+          paint(
+            ctxH,
+            canvasH,
+            unrotateRect(horizontal, sourceW, sourceH, rotation),
+            rotation,
+            settings,
+          );
+        }
+
+        if (fullQualityRef.current) {
+          fullFrameCountRef.current = (fullFrameCountRef.current ?? 0) + 1;
+        } else {
+          fullFrameCountRef.current = 0;
+        }
       }
       schedule();
     };
@@ -303,6 +387,11 @@ export default function DualCanvasRenderer({
     cropRef,
     rotationRef,
     settingsRef,
+    fullQualityRef,
+    fullFrameCountRef,
+    primaryFromCameraRef,
+    derivedSkipRef,
+    primarySkipRef,
     canvasHRef,
     canvasVRef,
   ]);

@@ -5,12 +5,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface PhotoResult {
   horizontalUrl: string;
   verticalUrl: string;
+  horizontalBlob: Blob;
+  verticalBlob: Blob;
   takenAt: number;
 }
 
 const JPEG_QUALITY = 0.92;
+export const PHOTO_MIME = "image/jpeg";
 
-function canvasToUrl(canvas: HTMLCanvasElement): Promise<string> {
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -18,9 +21,9 @@ function canvasToUrl(canvas: HTMLCanvasElement): Promise<string> {
           reject(new Error("canvas vazio"));
           return;
         }
-        resolve(URL.createObjectURL(blob));
+        resolve(blob);
       },
-      "image/jpeg",
+      PHOTO_MIME,
       JPEG_QUALITY,
     );
   });
@@ -47,13 +50,15 @@ export function usePhotoCapture() {
       canvasV: HTMLCanvasElement,
     ): Promise<PhotoResult | null> => {
       try {
-        const [horizontalUrl, verticalUrl] = await Promise.all([
-          canvasToUrl(canvasH),
-          canvasToUrl(canvasV),
+        const [horizontalBlob, verticalBlob] = await Promise.all([
+          canvasToBlob(canvasH),
+          canvasToBlob(canvasV),
         ]);
         const next: PhotoResult = {
-          horizontalUrl,
-          verticalUrl,
+          horizontalUrl: URL.createObjectURL(horizontalBlob),
+          verticalUrl: URL.createObjectURL(verticalBlob),
+          horizontalBlob,
+          verticalBlob,
           takenAt: Date.now(),
         };
         revoke(photoRef.current);

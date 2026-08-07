@@ -7,14 +7,6 @@ import {
   supportsCanvasFilter,
 } from "@/lib/media/filters";
 
-// a checagem cria um canvas descartável: vale guardar o resultado
-let canvasFilterSupport: boolean | null = null;
-
-function filtersWork(): boolean {
-  if (canvasFilterSupport === null) canvasFilterSupport = supportsCanvasFilter();
-  return canvasFilterSupport;
-}
-
 interface FilterStripProps {
   open: boolean;
   value: FilterId;
@@ -29,9 +21,9 @@ export default function FilterStrip({
   onChange,
   onClose,
 }: FilterStripProps) {
-  // só abre por interação do usuário, então nunca roda no servidor
+  // só abre por toque do usuário — nunca na pré-renderização do servidor
   if (!open) return null;
-  const supported = filtersWork();
+  const supported = supportsCanvasFilter();
   const active = getFilterPreset(value);
 
   return (
